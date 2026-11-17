@@ -1,0 +1,2944 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#080B12">
+<meta name="description" content="SoundPath — protótipo navegável de média fidelidade. Navegação que você escuta, não olha.">
+<title>SoundPath — Protótipo navegável (IHC 2026)</title>
+<!--
+  =====================================================================================
+  SoundPath · Protótipo de média fidelidade · IHC 2026 · Dom Helder Escola Superior
+  "Navegação que você escuta, não olha."
+  -------------------------------------------------------------------------------------
+  Arquivo único, sem dependências: HTML5 semântico + CSS3 + JavaScript puro.
+
+  ARQUITETURA (JavaScript, final do arquivo)
+    Bus .............. barramento de eventos (pub/sub) — evita dependências circulares.
+    Settings ......... configurações ajustáveis em tempo real (painel do avaliador).
+    HAPTIC_PATTERNS .. ÚNICA fonte dos padrões de vibração (seção 10 do enunciado).
+    StateMachine ..... estados, transições permitidas e validação.
+    Logger ........... registros em memória + exportação CSV (UTF-8 com BOM).
+    AudioEngine ...... Web Audio (HRTF / estéreo), bipes, volume, fala pt-BR, prioridades.
+    HapticEngine ..... navigator.vibrate() + simulador visual sincronizado.
+    RouteSimulator ... rota fictícia, eventos B1–B9 / C1–C3, timeline, demonstração rápida.
+    UI ............... telas, painel sensorial, diagrama espacial, simulador de vibração.
+    EvaluatorPanel ... painel Wizard of Oz (eventos, modos, ajustes, registros).
+
+  Fluxo de dependências (sempre em um sentido):
+    UI / EvaluatorPanel → RouteSimulator → { StateMachine, AudioEngine, HapticEngine, Logger }
+    Todos os módulos → Bus → UI (renderização).
+
+  AVISO ÉTICO E DE SEGURANÇA
+    A rota, o GPS, a localização e TODOS os alertas (travessias, assaltos etc.) são
+    fictícios. O protótipo NÃO detecta perigos reais. Deve ser testado somente em ambiente
+    controlado, com supervisão — nunca com participantes vendados em vias públicas.
+  =====================================================================================
+-->
+<style>
+/* =====================================================================================
+   1. TOKENS DE DESIGN
+   Contrastes verificados (WCAG 2.2 AA) sobre --bg (#080B12) e --surface (#111827):
+   --text ≈ 18:1 · --text-2 ≈ 10:1 · --text-3 ≈ 6:1 · --accent ≈ 11:1 · tinta escura sobre
+   botão ciano ≈ 11:1. Cores de estado sempre acompanhadas de ícone + texto.
+   ===================================================================================== */
+:root{
+  --outer-1:#1E2740; --outer-2:#0E1322;
+  --bg:#080B12; --pocket:#020306;
+  --surface:#111827; --surface-2:#172033; --surface-3:#1F2B42;
+  --line:#2C3A55; --line-strong:#3D4E6F;
+  --text:#F4F7FB; --text-2:#C3CCDA; --text-3:#97A3B8;
+  --accent:#22D3EE; --accent-strong:#67E8F9; --accent-ink:#03222B; --accent-soft:rgba(34,211,238,.14);
+  --ok:#34D399; --ok-soft:rgba(52,211,153,.14);
+  --warn:#FBBF24; --warn-soft:rgba(251,191,36,.14);
+  --danger:#F87171; --danger-soft:rgba(248,113,113,.15);
+  --info:#93C5FD; --info-soft:rgba(147,197,253,.14);
+  --focus:#FDE047;
+  --radius:16px; --radius-sm:12px;
+  --font:"Inter","Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"Cascadia Mono","SF Mono",Consolas,monospace;
+  --frame-h:min(844px, calc(100dvh - 48px));
+}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none !important}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; font:18px/1.5 var(--font); color:var(--text);
+  background:radial-gradient(1200px 700px at 50% 30%, var(--outer-1), var(--outer-2));
+  background-color:var(--outer-2);
+  overflow-x:hidden; min-height:100vh; min-height:100dvh;
+}
+h1,h2,h3,p{margin:0}
+h1{font-size:30px;line-height:1.2;font-weight:800;letter-spacing:-.01em}
+h2{font-size:22px;line-height:1.25;font-weight:750}
+h3{font-size:18px;line-height:1.3;font-weight:700}
+a{color:var(--accent-strong)}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--focus);outline-offset:3px;border-radius:6px}
+.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.skip-link{position:absolute;left:16px;top:-80px;z-index:100;background:var(--accent);color:var(--accent-ink);padding:10px 16px;border-radius:10px;font-weight:700}
+.skip-link:focus{top:16px}
+.muted{color:var(--text-2)}
+.small{font-size:16px}
+.ic{width:1.25em;height:1.25em;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-.2em}
+
+/* =====================================================================================
+   2. PALCO (desktop): painel sensorial | celular | espaço do painel do avaliador
+   ===================================================================================== */
+.stage{
+  min-height:100vh; min-height:100dvh; display:grid;
+  grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+  align-items:center; gap:40px; padding:24px;
+}
+.aside{justify-self:end;width:100%;max-width:380px;max-height:var(--frame-h);overflow-y:auto;border-radius:24px;scrollbar-width:thin}
+.device{position:relative;width:390px;height:var(--frame-h);grid-column:2}
+.phone{
+  position:relative; width:100%; height:100%; display:flex; flex-direction:column; overflow:hidden;
+  background:var(--bg); border-radius:46px;
+  box-shadow:0 0 0 10px #04060B, 0 0 0 12px #34405A, 0 30px 90px rgba(0,0,0,.65);
+  transition:background .4s;
+}
+/* Botões físicos simulados (lateral do aparelho). Área clicável 48×64 px. */
+.hwkey{position:absolute;left:-62px;width:48px;height:64px;border:0;background:transparent;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:flex-end;gap:6px;color:var(--text-2);font-weight:800;font-size:18px}
+.hwkey::after{content:"";width:6px;height:52px;border-radius:3px 0 0 3px;background:#3B4762;box-shadow:inset 0 0 0 1px #56647F;transition:background .15s}
+.hwkey:hover::after,.hwkey.pressed::after{background:var(--accent)}
+.hwkey-up{top:150px}.hwkey-down{top:226px}
+.statusbar{flex:none;height:42px;display:flex;align-items:center;justify-content:space-between;padding:6px 30px 0;font-size:15px;font-weight:700;color:var(--text)}
+.statusbar .sb-right{display:flex;gap:8px;align-items:center;color:var(--text-2)}
+.notch{position:absolute;top:10px;left:50%;transform:translateX(-50%);width:110px;height:28px;border-radius:20px;background:#000;pointer-events:none}
+
+/* Botão de engrenagem (avaliador) — discreto, sempre acessível */
+.gear{position:fixed;z-index:60;top:calc(12px + env(safe-area-inset-top));right:calc(12px + env(safe-area-inset-right));width:52px;height:52px;border-radius:50%;border:1px solid var(--line-strong);background:rgba(17,24,39,.88);color:var(--text-2);display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(6px)}
+.gear:hover{color:var(--text);border-color:var(--accent)}
+.gear[aria-expanded="true"]{color:var(--accent-ink);background:var(--accent);border-color:var(--accent)}
+.gear .ic{width:26px;height:26px}
+
+/* =====================================================================================
+   3. COMPONENTES BÁSICOS
+   Affordance: botões têm fundo, borda e altura ≥ 52 px; ação principal em ciano.
+   ===================================================================================== */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:10px;
+  min-height:52px;padding:12px 20px;border-radius:var(--radius-sm);border:1px solid var(--line-strong);
+  background:var(--surface-2);color:var(--text);font-size:18px;font-weight:650;line-height:1.2;cursor:pointer;text-align:center;
+  transition:background .15s,border-color .15s,transform .08s;
+}
+.btn:hover{background:var(--surface-3);border-color:#4B5E84}
+.btn:active{transform:scale(.98)}
+.btn[disabled],.btn[aria-disabled="true"]{opacity:.45;cursor:not-allowed;transform:none}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:800}
+.btn-primary:hover{background:var(--accent-strong);border-color:var(--accent-strong)}
+.btn-ghost{background:transparent}
+.btn-danger{background:var(--danger-soft);border-color:var(--danger);color:#FECACA}
+.btn-danger:hover{background:rgba(248,113,113,.25)}
+.btn-ok{background:var(--ok-soft);border-color:var(--ok);color:#BBF7D0}
+.btn-block{width:100%}
+.btn-lg{min-height:64px;font-size:20px;border-radius:var(--radius)}
+.btn .ic{width:22px;height:22px}
+.icon-btn{width:48px;height:48px;min-height:48px;padding:0;border-radius:12px}
+.link-btn{background:none;border:0;color:var(--text-2);text-decoration:underline;text-underline-offset:3px;font-size:16px;padding:12px 6px;min-height:48px;cursor:pointer}
+.link-btn:hover{color:var(--text)}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:15px;font-weight:700;border:1px solid currentColor;line-height:1.3}
+.badge .ic{width:16px;height:16px}
+.badge-ok{color:var(--ok);background:var(--ok-soft)}
+.badge-warn{color:var(--warn);background:var(--warn-soft)}
+.badge-info{color:var(--info);background:var(--info-soft)}
+.badge-demo{color:var(--text-2);background:transparent;border-style:dashed}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+.note{font-size:16px;color:var(--text-2);border-left:3px solid var(--warn);padding:8px 12px;background:var(--warn-soft);border-radius:0 10px 10px 0}
+.field label,.label{display:block;font-weight:700;margin-bottom:6px}
+.input{width:100%;min-height:52px;padding:12px 14px;border-radius:var(--radius-sm);border:1px solid var(--line-strong);background:#0C1220;font-size:18px}
+.input:focus-visible{outline-offset:1px}
+.input[aria-invalid="true"]{border-color:var(--danger)}
+.error{color:#FECACA;font-size:16px;display:flex;gap:6px;align-items:center}
+.pbar{height:10px;border-radius:999px;background:var(--surface-3);overflow:hidden;border:1px solid var(--line)}
+.pbar-fill{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--ok));border-radius:999px;transition:width .3s}
+
+/* =====================================================================================
+   4. APP BAR E TELAS
+   ===================================================================================== */
+.appbar{flex:none;display:flex;align-items:center;gap:6px;min-height:58px;padding:4px 16px 4px 8px}
+.appbar-title{display:flex;flex-direction:column;line-height:1.2}
+.appbar-title strong{font-size:18px}
+.appbar-title span{font-size:15px;color:var(--text-3)}
+.screens{position:relative;flex:1;min-height:0}
+.screen{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding:12px 22px 28px;display:flex;flex-direction:column;gap:18px;scrollbar-width:thin;animation:enter .28s ease}
+@keyframes enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.screen h1:focus{outline:none}
+.screen h1:focus-visible{outline:3px solid var(--focus)}
+.eyebrow{font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.lead{font-size:18px;color:var(--text-2)}
+.spacer{flex:1}
+
+/* Boas-vindas */
+.hero{padding-top:28px;display:flex;flex-direction:column;gap:14px}
+.logo{display:flex;align-items:center;gap:12px}
+.logo-mark{width:58px;height:58px;border-radius:18px;display:grid;place-items:center;background:linear-gradient(135deg,#0E7490,#22D3EE);color:#02161C}
+.logo-mark .ic{width:34px;height:34px;stroke-width:2.4}
+.logo-word{font-size:40px;font-weight:850;letter-spacing:-.03em;line-height:1}
+.logo-word b{color:var(--accent)}
+.slogan{font-size:20px;font-weight:650;color:var(--text)}
+.features{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.features li{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:14px}
+.features .ic{color:var(--accent);margin-top:3px}
+.wave-deco{display:flex;gap:5px;align-items:center;height:42px}
+.wave-deco span{width:6px;border-radius:3px;background:var(--accent);opacity:.75;animation:wave 1.4s ease-in-out infinite}
+@keyframes wave{0%,100%{height:10px}50%{height:40px}}
+
+/* Onboarding */
+.ob-visual{display:grid;place-items:center;padding:20px 0 6px}
+.ob-icon{width:148px;height:148px;border-radius:44px;display:grid;place-items:center;background:radial-gradient(circle at 30% 30%,rgba(34,211,238,.28),rgba(34,211,238,.05));border:1px solid rgba(34,211,238,.35);color:var(--accent)}
+.ob-icon .ic{width:76px;height:76px;stroke-width:1.6}
+.ob-progress{display:flex;flex-direction:column;gap:8px}
+.dots{display:flex;gap:8px;list-style:none;margin:0;padding:0}
+.dots li{flex:1;height:8px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line)}
+.dots li.done{background:#0E7490}
+.dots li[aria-current="step"]{background:var(--accent)}
+.btn-row{display:flex;gap:12px}
+.btn-row>.btn{flex:1}
+
+/* Treinamento */
+.train-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.train-btn{flex-direction:column;align-items:flex-start;text-align:left;min-height:96px;padding:12px 14px;gap:4px}
+.train-btn .ic{width:28px;height:28px;color:var(--accent)}
+.train-btn .t-label{font-size:19px;font-weight:800}
+.train-btn .t-desc{font-size:15px;font-weight:500;color:var(--text-2)}
+.train-btn[data-train="perigo"] .ic{color:var(--danger)}
+.train-btn[data-train="chegada"] .ic,.train-btn[data-train="confirmacao"] .ic{color:var(--ok)}
+.train-btn.playing{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
+.train-btn:last-child{grid-column:1 / -1;min-height:72px}
+.train-feedback{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.train-now{font-size:16px;color:var(--text-2);min-height:48px}
+.dir-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.dir-row .btn{padding:8px 4px;font-size:16px;min-height:48px}
+.test-card{display:flex;flex-direction:column;gap:12px}
+.test-card fieldset{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:10px}
+.test-card legend{font-weight:750;font-size:19px;margin-bottom:10px;padding:0}
+.result{font-size:17px;padding:10px 12px;border-radius:12px}
+.result.ok{background:var(--ok-soft);color:#BBF7D0;border:1px solid var(--ok)}
+.result.bad{background:var(--warn-soft);color:#FDE68A;border:1px solid var(--warn)}
+.help-list{margin:0;padding-left:20px;font-size:16px;color:var(--text-2);display:grid;gap:4px}
+.api-notes{display:grid;gap:8px}
+.api-notes p{font-size:16px;color:#FDE68A;background:var(--warn-soft);border:1px solid rgba(251,191,36,.5);border-radius:12px;padding:8px 12px}
+
+/* Destino */
+.input-row{display:flex;gap:10px}
+.input-row .input{flex:1}
+.mic-btn{width:56px;height:56px;min-height:52px;padding:0;border-radius:var(--radius-sm)}
+.mic-btn[aria-pressed="true"]{background:var(--danger-soft);border-color:var(--danger);color:#FECACA;animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 6px rgba(248,113,113,.18)}}
+.mic-status{font-size:16px;color:var(--text-2);min-height:24px}
+.routes{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.route-card{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;padding:14px 16px;border-radius:var(--radius);border:1px solid var(--line);background:var(--surface);cursor:pointer;min-height:52px}
+.route-card:hover{border-color:var(--accent);background:var(--surface-2)}
+.route-card .r-name{font-size:19px;font-weight:800;display:flex;gap:8px;align-items:center}
+.route-card .r-meta{font-size:16px;color:var(--text-2)}
+.route-card .r-badges{display:flex;gap:8px;flex-wrap:wrap}
+
+/* Resumo e chegada */
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0}
+.kv>div{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.kv dt{font-size:15px;color:var(--text-2);display:flex;gap:6px;align-items:center}
+.kv dt .ic{width:16px;height:16px}
+.kv dd{margin:2px 0 0;font-size:24px;font-weight:800;line-height:1.2}
+.alert-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.alert-list li{display:flex;gap:10px;align-items:flex-start;font-size:17px;padding:10px 12px;border-radius:12px;background:var(--surface);border:1px solid var(--line)}
+.alert-list .ic{color:var(--warn);margin-top:2px}
+.arrive-icon{width:120px;height:120px;border-radius:50%;display:grid;place-items:center;background:var(--ok-soft);border:2px solid var(--ok);color:var(--ok);margin:18px auto 4px}
+.arrive-icon .ic{width:60px;height:60px}
+.arrive-icon.ended{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
+.center{text-align:center}
+
+/* Modo bolso */
+.phone.pocket{background:var(--pocket)}
+.screen-pocket{padding-top:10px;gap:14px}
+.pocket-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.pocket-msg{display:flex;flex-direction:column;align-items:center;text-align:center;gap:14px;padding:28px 6px 8px}
+.pocket-msg .ic-wrap{width:96px;height:96px;border-radius:30px;display:grid;place-items:center;background:#0B1220;border:1px solid var(--line);color:var(--accent)}
+.pocket-msg .ic-wrap .ic{width:52px;height:52px;stroke-width:1.6}
+.pocket-msg h1{font-size:32px}
+.pocket-msg p{font-size:19px;color:var(--text-2);max-width:300px}
+.vol-pair{display:grid;gap:10px}
+.vol-btn{min-height:76px;border-radius:20px;justify-content:flex-start;padding:12px 18px;gap:14px;background:#0B1220}
+.vol-btn .vol-sign{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;background:var(--surface-3);font-size:28px;font-weight:900;line-height:1}
+.vol-btn .vol-text{display:flex;flex-direction:column;align-items:flex-start;line-height:1.25}
+.vol-btn .vol-text strong{font-size:20px}
+.vol-btn .vol-text span{font-size:16px;color:var(--text-2);font-weight:500}
+.vol-btn.pressed,.vol-btn:active{border-color:var(--accent);background:var(--accent-soft)}
+.vol-btn.attention{border-color:var(--warn);box-shadow:0 0 0 2px var(--warn) inset}
+.kbd-hint{font-size:15px;color:var(--text-3);text-align:center}
+kbd{font-family:var(--mono);font-size:.9em;padding:1px 6px;border-radius:6px;border:1px solid var(--line-strong);background:var(--surface-2)}
+.pocket-panel{border-top:1px dashed var(--line);padding-top:10px;display:flex;flex-direction:column;gap:10px}
+.disclosure{justify-content:space-between;width:100%}
+.disclosure .ic-chev{transition:transform .2s}
+.disclosure[aria-expanded="true"] .ic-chev{transform:rotate(90deg)}
+
+/* =====================================================================================
+   5. ESTADOS (cor + ícone + texto — a cor nunca é o único indicador)
+   ===================================================================================== */
+[data-state]{--tone:var(--text-2);--tone-soft:rgba(195,204,218,.10)}
+[data-state="NAVEGANDO"]{--tone:var(--accent);--tone-soft:var(--accent-soft)}
+[data-state="CHEGANDO"]{--tone:var(--info);--tone-soft:var(--info-soft)}
+[data-state="CHEGOU"]{--tone:var(--ok);--tone-soft:var(--ok-soft)}
+[data-state="CONFIRMACAO"]{--tone:var(--ok);--tone-soft:var(--ok-soft)}
+[data-state="PERIGO"]{--tone:var(--danger);--tone-soft:var(--danger-soft)}
+[data-state="PAUSADO"]{--tone:var(--warn);--tone-soft:var(--warn-soft)}
+.state-badge{display:inline-flex;align-items:center;gap:10px;padding:8px 14px;border-radius:999px;border:2px solid var(--tone);background:var(--tone-soft);color:var(--tone);font-weight:850;font-size:18px;letter-spacing:.02em}
+.state-badge .ic{width:22px;height:22px}
+.state-badge.lg{font-size:22px;padding:10px 18px}
+.state-badge[data-state="PERIGO"]{animation:dangerPulse 1s ease-in-out infinite}
+@keyframes dangerPulse{50%{box-shadow:0 0 0 6px rgba(248,113,113,.2)}}
+
+/* =====================================================================================
+   6. PAINEL SENSORIAL (avaliador)
+   ===================================================================================== */
+.sensory{display:flex;flex-direction:column;gap:12px}
+.sensory-head{display:flex;flex-direction:column;gap:4px;padding:4px 2px}
+.sensory-head h2{font-size:22px;display:flex;align-items:center;gap:8px}
+.s-card{background:rgba(17,24,39,.94);border:1px solid var(--line);border-radius:var(--radius);padding:14px;display:flex;flex-direction:column;gap:10px}
+.s-title{font-size:15px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-3);font-weight:800;display:flex;gap:8px;align-items:center}
+.s-title .ic{width:18px;height:18px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:15px;font-weight:650;padding:4px 10px;border-radius:999px;border:1px solid var(--line-strong);color:var(--text-2)}
+.chip .ic{width:16px;height:16px}
+.chip.ok{color:var(--ok);border-color:rgba(52,211,153,.6)}
+.chip.warn{color:var(--warn);border-color:rgba(251,191,36,.7);background:var(--warn-soft)}
+.chip.bad{color:var(--danger);border-color:rgba(248,113,113,.7);background:var(--danger-soft)}
+.pause-banner{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:12px;background:var(--warn-soft);border:1px solid var(--warn);color:#FDE68A;font-size:17px}
+.pause-banner strong{display:flex;gap:8px;align-items:center}
+.speech{display:flex;gap:12px;align-items:flex-start}
+.speech .sp-ico{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:var(--surface-3);color:var(--text-2);flex:none}
+.speech.is-speaking .sp-ico{background:var(--accent);color:var(--accent-ink)}
+.caption{font-size:20px;font-weight:700;line-height:1.35;min-height:54px}
+.speech-status{display:flex;align-items:center;gap:8px;font-size:15px;color:var(--text-2)}
+.eq{display:inline-flex;gap:3px;align-items:flex-end;height:16px}
+.eq i{width:4px;height:4px;border-radius:2px;background:var(--text-3)}
+.speech.is-speaking .eq i{background:var(--accent);animation:eq .7s ease-in-out infinite}
+.speech.is-speaking .eq i:nth-child(2){animation-delay:.15s}
+.speech.is-speaking .eq i:nth-child(3){animation-delay:.3s}
+@keyframes eq{0%,100%{height:4px}50%{height:16px}}
+.meta{font-size:15px;color:var(--text-3)}
+.decision{font-size:17px;padding:10px 12px;border-radius:12px;border:1px dashed var(--line-strong);color:var(--text-2)}
+.decision.pending{border:2px solid var(--warn);background:var(--warn-soft);color:#FDE68A;font-weight:650}
+.vol-mini{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.vol-mini .btn{font-size:17px;padding:10px 8px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin:0}
+.stats dt{font-size:15px;color:var(--text-3)}
+.stats dd{margin:0;font-size:18px;font-weight:750}
+.stats .full{grid-column:1 / -1}
+
+/* Diagrama espacial (vista aérea) */
+.spatial{display:flex;flex-direction:column;align-items:center;gap:8px}
+.sp-svg{width:100%;max-width:230px;height:auto;overflow:visible}
+.sp-ring{fill:none;stroke:var(--line-strong);stroke-width:1.5}
+.sp-ring-in{stroke-dasharray:4 5;stroke:var(--line)}
+.sp-axis{stroke:var(--line);stroke-width:1;stroke-dasharray:2 6}
+.sp-lbl{fill:var(--text-2);font:800 14px var(--font);letter-spacing:.06em}
+.sp-skull{fill:#24324D;stroke:#5B6E94;stroke-width:2}
+.sp-ear{fill:#3A4A6B;stroke:#5B6E94;stroke-width:1.5}
+.sp-nose{fill:var(--accent)}
+.sp-src{transition:transform .45s cubic-bezier(.2,.8,.2,1),opacity .3s}
+.spatial.idle .sp-src{opacity:0}
+.sp-dot{fill:var(--accent);stroke:#E0FBFF;stroke-width:2;opacity:.55;transition:opacity .3s}
+.sp-halo{fill:var(--accent);opacity:0}
+.spatial.is-playing .sp-dot{opacity:1}
+.spatial.is-playing .sp-halo{animation:halo .9s ease-out infinite}
+.spatial.is-beep .sp-dot{opacity:.95}
+.spatial.tone-danger .sp-dot,.spatial.tone-danger .sp-halo{fill:var(--danger)}
+.spatial.silent .sp-dot{fill:transparent;stroke:var(--text-3);stroke-dasharray:3 3}
+@keyframes halo{from{transform:scale(.5);opacity:.75}to{transform:scale(1.9);opacity:0}}
+.sp-info{text-align:center;display:flex;flex-direction:column;gap:2px}
+.sp-dir{font-weight:800;font-size:18px}
+.sp-sound,.sp-mode{font-size:15px;color:var(--text-2)}
+.compact .sp-svg{max-width:150px}
+.compact .sp-lbl{font-size:16px}
+.compact .sp-dir{font-size:16px}
+
+/* Simulador de vibração */
+.vibe{display:flex;flex-direction:column;gap:10px}
+.vibe-row{display:flex;gap:12px;align-items:center}
+.vibe-phone{position:relative;width:52px;height:64px;border-radius:12px;display:grid;place-items:center;background:var(--surface-3);border:2px solid var(--line-strong);color:var(--text-2);flex:none}
+.vibe-phone .ic{width:30px;height:30px}
+.vibe.buzzing .vibe-phone{border-color:var(--accent);color:var(--accent);animation:buzz .07s linear infinite}
+@keyframes buzz{0%{transform:translateX(-2px) rotate(-2deg)}50%{transform:translateX(2px) rotate(2deg)}100%{transform:translateX(-2px) rotate(-2deg)}}
+.vibe-status{font-weight:800;font-size:17px}
+.vibe.buzzing .vibe-status{color:var(--accent)}
+.vibe-name{font-size:15px;color:var(--text-2)}
+.vibe-bars{display:flex;align-items:flex-end;gap:2px;min-height:44px}
+.seg{display:flex;flex-direction:column;justify-content:flex-end;gap:3px;flex-basis:0;min-width:5px}
+.seg i{display:block;height:22px;border-radius:4px;background:var(--surface-3);border:1px solid var(--line-strong)}
+.seg.pause i{height:0;border:0;border-top:2px dashed var(--line-strong);border-radius:0;margin-bottom:10px}
+.seg.pulse.done i{background:#0E7490;border-color:#0E7490}
+.seg.pulse.active i{background:var(--accent);border-color:var(--accent-strong);box-shadow:0 0 10px rgba(34,211,238,.6)}
+.seg b{font:600 12px var(--mono);color:var(--text-3);text-align:center;white-space:nowrap;overflow:hidden}
+.vibe-meta{font:500 14px var(--mono);color:var(--text-2);word-break:break-word}
+.vibe-api{font-size:15px;color:var(--text-3)}
+.vibe-api.warn{color:#FDE68A}
+.compact .vibe-phone{width:44px;height:54px}
+
+/* =====================================================================================
+   7. PAINEL DO AVALIADOR (drawer não-modal: não prende o foco; Esc fecha)
+   ===================================================================================== */
+.drawer{position:fixed;z-index:70;top:0;right:0;bottom:0;width:min(440px,100vw);background:#0B1120;border-left:1px solid var(--line-strong);box-shadow:-20px 0 60px rgba(0,0,0,.5);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .25s ease;padding-bottom:env(safe-area-inset-bottom)}
+.drawer.open{transform:none}
+.drawer-head{display:flex;align-items:flex-start;gap:10px;padding:16px 16px 10px;padding-top:calc(16px + env(safe-area-inset-top))}
+.drawer-head h2{font-size:24px}
+.drawer-head h2:focus{outline:none}
+.drawer-head .muted{font-size:15px}
+.drawer-status{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:0 16px 10px;font-size:15px;color:var(--text-2)}
+.drawer-status .state-badge{font-size:15px;padding:4px 10px}
+.drawer-status .state-badge .ic{width:16px;height:16px}
+.tabs{display:flex;gap:4px;padding:0 12px;border-bottom:1px solid var(--line)}
+.tab{flex:1;min-height:50px;background:none;border:0;border-bottom:3px solid transparent;color:var(--text-2);font-weight:750;font-size:17px;cursor:pointer;padding:6px 4px;display:flex;align-items:center;justify-content:center;gap:6px}
+.tab[aria-selected="true"]{color:var(--text);border-bottom-color:var(--accent)}
+.tab .count{font-size:13px;background:var(--surface-3);border-radius:999px;padding:1px 7px;color:var(--text-2)}
+.tabpanel{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:16px;scrollbar-width:thin}
+.tabpanel h3{display:flex;gap:8px;align-items:center}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.ev-btn{justify-content:flex-start;text-align:left;font-size:17px;padding:10px 12px;min-height:52px;gap:8px}
+.ev-btn .code{font:800 15px var(--mono);padding:2px 6px;border-radius:6px;background:var(--surface-3);color:var(--accent-strong);flex:none}
+.ev-btn.exc .code{color:#FDE68A}
+.ev-btn.flash{border-color:var(--accent);background:var(--accent-soft)}
+.seg-control{display:flex;border:1px solid var(--line-strong);border-radius:14px;overflow:hidden}
+.seg-control label{flex:1;position:relative;cursor:pointer}
+.seg-control input{position:absolute;opacity:0;inset:0;cursor:pointer}
+.seg-control span{display:flex;align-items:center;justify-content:center;gap:6px;min-height:50px;font-weight:750;color:var(--text-2);padding:6px}
+.seg-control input:checked+span{background:var(--accent);color:var(--accent-ink)}
+.seg-control input:focus-visible+span{outline:3px solid var(--focus);outline-offset:-3px}
+fieldset.plain{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}
+fieldset.plain legend{font-weight:750;padding:0;margin-bottom:8px}
+.demo-card{display:flex;flex-direction:column;gap:12px}
+.demo-now{font-size:20px;font-weight:800}
+.demo-dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0;font-size:16px}
+.demo-dl dt{color:var(--text-3)}
+.demo-dl dd{margin:0;font-weight:650}
+.demo-steps{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:16px}
+.demo-steps li{display:flex;gap:8px;align-items:center;padding:6px 10px;border-radius:10px;color:var(--text-2)}
+.demo-steps li .ic{width:18px;height:18px}
+.demo-steps li.st-executando,.demo-steps li.st-aguardando{background:var(--accent-soft);color:var(--text);font-weight:750}
+.demo-steps li.st-concluído{color:var(--text)}
+.demo-steps li.st-concluído .ic{color:var(--ok)}
+.demo-steps li.st-ignorado{text-decoration:line-through;color:var(--text-3)}
+.waiting-box{display:flex;flex-direction:column;gap:10px;padding:12px;border-radius:12px;border:2px solid var(--warn);background:var(--warn-soft);color:#FDE68A}
+.range{display:flex;flex-direction:column;gap:6px}
+.range-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.range-top label{font-weight:700}
+.range output{font:700 16px var(--mono);color:var(--accent-strong)}
+input[type=range]{width:100%;accent-color:var(--accent);min-height:32px}
+.select{min-height:50px;padding:8px 12px;border-radius:12px;border:1px solid var(--line-strong);background:#0C1220;width:100%}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:17px;cursor:pointer}
+.check input{width:22px;height:22px;margin-top:3px;accent-color:var(--accent)}
+.diag{list-style:none;margin:0;padding:0;display:grid;gap:6px;font-size:16px}
+.diag li{display:flex;gap:8px;align-items:flex-start}
+.diag .ic{width:18px;height:18px;margin-top:3px}
+.diag .yes{color:var(--ok)} .diag .no{color:var(--warn)}
+.log-tools{display:flex;gap:8px;flex-wrap:wrap}
+.log-tools .btn{flex:1;min-width:140px}
+.log-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:15px}
+.log-list li{padding:8px 10px;border-radius:10px;background:var(--surface);border:1px solid var(--line);display:flex;flex-direction:column;gap:2px}
+.log-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.log-time{font-family:var(--mono);color:var(--text-3)}
+.log-type{font-weight:800;font-size:13px;padding:1px 6px;border-radius:6px;background:var(--surface-3);color:var(--text-2)}
+.log-type.t-EVENTO{color:var(--accent-strong)}
+.log-type.t-EXCEÇÃO,.log-type.t-EVENTO_IGNORADO{color:#FDE68A}
+.log-type.t-AÇÃO_PARTICIPANTE,.log-type.t-DECISÃO,.log-type.t-REPETIÇÃO{color:#BBF7D0}
+.log-code{font-family:var(--mono);font-weight:800}
+.log-states{font-family:var(--mono);color:var(--text-3);font-size:13px}
+.log-desc{color:var(--text)}
+.log-meta{color:var(--text-3);font-size:13px}
+.empty{color:var(--text-3);font-size:16px;text-align:center;padding:14px}
+
+/* Toasts e diálogo */
+.toasts{position:fixed;z-index:90;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;width:min(440px,calc(100vw - 32px));pointer-events:none}
+.toast{pointer-events:auto;background:#0B1120;border:1px solid var(--line-strong);border-left:4px solid var(--info);border-radius:12px;padding:12px 14px;font-size:16px;box-shadow:0 10px 30px rgba(0,0,0,.5);animation:enter .2s ease}
+.toast.warn{border-left-color:var(--warn)} .toast.ok{border-left-color:var(--ok)} .toast.danger{border-left-color:var(--danger)}
+dialog.dlg{border:1px solid var(--line-strong);border-radius:20px;background:#0E1526;color:var(--text);padding:22px;width:min(420px,calc(100vw - 32px));box-shadow:0 30px 80px rgba(0,0,0,.6)}
+dialog.dlg::backdrop{background:rgba(2,4,10,.72)}
+.dlg h2{margin-bottom:10px}
+.dlg .dlg-body{color:var(--text-2);display:flex;flex-direction:column;gap:10px;font-size:17px}
+.dlg .btn-row{margin-top:18px}
+
+/* =====================================================================================
+   8. RESPONSIVIDADE (mobile-first na prática: o celular real ocupa a tela inteira)
+   ===================================================================================== */
+@media (max-width:1099px){
+  .stage{grid-template-columns:1fr;justify-items:center}
+  .aside{display:none}
+  .device{grid-column:1}
+}
+@media (min-width:1100px){
+  .pocket-panel{display:none}
+}
+@media (max-width:600px){
+  .stage{padding:0;display:block}
+  .device{width:100%;height:100vh;height:100dvh}
+  .phone{border-radius:0;box-shadow:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+  .statusbar,.notch,.hwkey{display:none}
+  .appbar{padding-right:72px}
+  .pocket-top{padding-right:60px}
+  .screen{padding:10px 16px 24px}
+  .hero{padding-top:56px}
+  .train-feedback{grid-template-columns:1fr}
+}
+@media (max-width:360px){
+  .train-grid,.kv,.grid2{grid-template-columns:1fr}
+  .train-btn:last-child{grid-column:auto}
+}
+/* Movimento reduzido: remove animações decorativas; o feedback continua por texto e
+   indicadores estáticos (borda destacada + rótulo "Vibrando"). */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
+  .vibe.buzzing .vibe-phone{transform:none;outline:3px solid var(--accent);outline-offset:2px}
+  .spatial.is-playing .sp-halo{opacity:.35;transform:scale(1.3)}
+  .wave-deco span{height:24px}
+}
+</style>
+</head>
+<body>
+
+<!-- Sprite de ícones (SVG inline, sem dependências externas) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h1M7 8v8M11 4v16M15 7v10M19 10v4"/></symbol>
+    <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></symbol>
+    <symbol id="i-headphones-off" viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 15-6.7"/><path d="M21 12v6"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/><path d="M2 2l20 20"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></symbol>
+    <symbol id="i-pocket" viewBox="0 0 24 24"><path d="M4 3h16v8a8 8 0 0 1-16 0z"/><path d="M8 10l4 4 4-4"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 22V4"/><path d="M5 4h12l-2 4 2 4H5"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 21h20z"/><path d="M12 10v5M12 18h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></symbol>
+    <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" stroke-dasharray="2.95 2.94" stroke-width="3.6"/><circle cx="12" cy="12" r="5.6"/><circle cx="12" cy="12" r="2.2"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 22s7-7.5 7-13a7 7 0 0 0-14 0c0 5.5 7 13 7 13z"/><circle cx="12" cy="9" r="2.5"/></symbol>
+    <symbol id="i-offline" viewBox="0 0 24 24"><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0M5 12.5a10 10 0 0 1 4.5-2.6M19 12.5a10 10 0 0 0-2.3-1.7M12 20h.01"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M2 9a15 15 0 0 1 20 0M12 20h.01"/></symbol>
+    <symbol id="i-saved" viewBox="0 0 24 24"><path d="M7 18a5 5 0 1 1 1-9.9A6 6 0 0 1 19 10a4 4 0 0 1 0 8z"/><path d="M9.5 13.5l2 2 3.5-3.5"/></symbol>
+    <symbol id="i-gps" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+    <symbol id="i-skip" viewBox="0 0 24 24"><path d="M5 5l10 7-10 7z"/><path d="M19 5v14"/></symbol>
+    <symbol id="i-restart" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h8a3.5 3.5 0 0 0 0-7H8a3.5 3.5 0 0 1 0-7h8"/></symbol>
+    <symbol id="i-crossing" viewBox="0 0 24 24"><path d="M3 6h18M3 18h18M7 8v8M12 8v8M17 8v8"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></symbol>
+    <symbol id="i-nav" viewBox="0 0 24 24"><path d="M12 2l7 19-7-4-7 4z"/></symbol>
+    <symbol id="i-log" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+    <symbol id="i-vibrate" viewBox="0 0 24 24"><rect x="8" y="4" width="8" height="16" rx="1.5"/><path d="M4 8v8M20 8v8M1.5 10v4M22.5 10v4"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/></symbol>
+  </defs>
+</svg>
+
+<a class="skip-link" href="#app">Pular para o aplicativo</a>
+
+<!-- Painel do avaliador: botão de engrenagem discreto, acessível em todo o protótipo -->
+<button id="gear" class="gear" type="button" aria-expanded="false" aria-controls="drawer" aria-label="Abrir painel do avaliador" title="Painel do avaliador (Wizard of Oz)" data-log="ENGRENAGEM">
+  <svg class="ic" aria-hidden="true"><use href="#i-gear"/></svg>
+</button>
+
+<div class="stage">
+  <!-- Painel sensorial: no desktop fica ao lado do celular; no celular é movido para o modo bolso -->
+  <aside class="aside" id="aside" aria-label="Painel sensorial do avaliador">
+    <div id="aside-slot">
+      <div class="sensory" id="sensory">
+        <header class="sensory-head">
+          <h2><svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg>Painel sensorial</h2>
+          <p class="muted small">Ferramenta do avaliador: espelha em tempo real o que o participante ouve e sente. Não é necessária ao participante.</p>
+        </header>
+
+        <section class="s-card" aria-labelledby="h-state">
+          <h3 class="s-title" id="h-state">Estado atual</h3>
+          <div><span class="state-badge lg js-state" data-state="PARADO"></span></div>
+          <div class="chips" id="conditions" aria-label="Condições simuladas"></div>
+          <div class="pause-banner" id="pause-banner" hidden>
+            <strong><svg class="ic" aria-hidden="true"><use href="#i-pause"/></svg><span id="pause-reason">Navegação pausada</span></strong>
+            <button type="button" class="btn btn-ok" data-action="resume" data-log="RETOMAR">
+              <svg class="ic" aria-hidden="true"><use href="#i-play"/></svg><span id="pause-resume-label">Retomar navegação</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="s-card" aria-labelledby="h-speech">
+          <h3 class="s-title" id="h-speech"><svg class="ic" aria-hidden="true"><use href="#i-volume"/></svg>Fala atual</h3>
+          <div class="speech" id="speech-box">
+            <span class="sp-ico" aria-hidden="true"><svg class="ic"><use href="#i-volume"/></svg></span>
+            <!-- Legenda das instruções prioritárias: anunciada a leitores de tela (aria-live assertive).
+                 Bipes periódicos NÃO passam por aqui, evitando anúncios repetitivos. -->
+            <p class="caption" id="caption" aria-live="assertive" aria-atomic="true">Nenhuma instrução ainda.</p>
+          </div>
+          <p class="speech-status"><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span><span id="speech-status">Em silêncio</span></p>
+          <p class="meta" id="speech-meta">Voz: verificando…</p>
+        </section>
+
+        <section class="s-card s-collapsible" aria-labelledby="h-spatial">
+          <h3 class="s-title" id="h-spatial"><svg class="ic" aria-hidden="true"><use href="#i-headphones"/></svg>Áudio espacial · vista aérea</h3>
+          <div data-widget="spatial"></div>
+        </section>
+
+        <section class="s-card s-collapsible" aria-labelledby="h-vibe">
+          <h3 class="s-title" id="h-vibe"><svg class="ic" aria-hidden="true"><use href="#i-vibrate"/></svg>Simulador de vibração</h3>
+          <div data-widget="vibe"></div>
+        </section>
+
+        <section class="s-card s-collapsible" aria-labelledby="h-actions">
+          <h3 class="s-title" id="h-actions">Ações disponíveis ao participante</h3>
+          <p class="decision" id="decision-box">Nenhuma decisão pendente.</p>
+          <div class="vol-mini">
+            <button type="button" class="btn" data-vol="up" data-src="painel sensorial" aria-label="Volume mais: confirmar">
+              <svg class="ic" aria-hidden="true"><use href="#i-arrow-up"/></svg>Vol + confirmar
+            </button>
+            <button type="button" class="btn" data-vol="down" data-src="painel sensorial" aria-label="Volume menos: repetir instrução">
+              <svg class="ic" aria-hidden="true"><use href="#i-arrow-down"/></svg>Vol − repetir
+            </button>
+          </div>
+          <p class="meta">Teclado: <kbd>↑</kbd> ou <kbd>+</kbd> confirma · <kbd>↓</kbd> ou <kbd>−</kbd> repete</p>
+        </section>
+
+        <section class="s-card s-collapsible" aria-labelledby="h-progress">
+          <h3 class="s-title" id="h-progress"><svg class="ic" aria-hidden="true"><use href="#i-route"/></svg>Progresso da rota</h3>
+          <div class="pbar" role="progressbar" aria-label="Progresso da rota" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="route-pbar"><span class="pbar-fill js-progress-bar"></span></div>
+          <dl class="stats">
+            <div><dt>Distância total</dt><dd id="pg-total">—</dd></div>
+            <div><dt>Restante</dt><dd id="pg-remaining">—</dd></div>
+            <div><dt>Percorrido</dt><dd id="pg-done">—</dd></div>
+            <div><dt>Tempo simulado</dt><dd id="pg-time">00:00</dd></div>
+            <div class="full"><dt>Etapa atual</dt><dd id="pg-step">Aguardando início</dd></div>
+          </dl>
+        </section>
+      </div>
+    </div>
+  </aside>
+
+  <div class="device">
+    <!-- Botões físicos de volume simulados (desktop). Funcionais, não decorativos. -->
+    <button type="button" class="hwkey hwkey-up" data-vol="up" data-src="botão lateral" aria-label="Botão físico Volume mais (simulado): confirmar" title="Volume + (confirmar)">+</button>
+    <button type="button" class="hwkey hwkey-down" data-vol="down" data-src="botão lateral" aria-label="Botão físico Volume menos (simulado): repetir" title="Volume − (repetir)">−</button>
+
+    <main class="phone" id="app" tabindex="-1" aria-label="SoundPath">
+      <div class="notch" aria-hidden="true"></div>
+      <div class="statusbar" aria-hidden="true">
+        <span id="sb-clock">09:41</span>
+        <span class="sb-right"><span id="sb-net">5G</span><svg class="ic" style="width:18px;height:18px"><use href="#i-wifi"/></svg><span>86%</span></span>
+      </div>
+
+      <header class="appbar" id="appbar" hidden>
+        <button type="button" class="btn btn-ghost icon-btn" id="back-btn" aria-label="Voltar" data-log="VOLTAR">
+          <svg class="ic" aria-hidden="true"><use href="#i-back"/></svg>
+        </button>
+        <div class="appbar-title"><strong id="appbar-title">Preparação</strong><span id="appbar-step">Preparação · 1 de 4</span></div>
+      </header>
+
+      <div class="screens">
+        <!-- A1. Boas-vindas -->
+        <section class="screen" data-screen="welcome" aria-labelledby="t-welcome">
+          <div class="hero">
+            <div class="logo">
+              <span class="logo-mark" aria-hidden="true"><svg class="ic"><use href="#i-wave"/></svg></span>
+              <h1 id="t-welcome" class="logo-word" tabindex="-1">Sound<b>Path</b></h1>
+            </div>
+            <p class="slogan">Navegação que você escuta, não olha.</p>
+            <div class="wave-deco" aria-hidden="true"><span style="animation-delay:0s"></span><span style="animation-delay:.15s"></span><span style="animation-delay:.3s"></span><span style="animation-delay:.45s"></span><span style="animation-delay:.6s"></span><span style="animation-delay:.75s"></span><span style="animation-delay:.9s"></span></div>
+            <p class="lead">O SoundPath guia sua caminhada só com <strong>som espacial</strong> e <strong>vibração</strong>. O celular fica no bolso e suas mãos ficam livres.</p>
+          </div>
+          <ul class="features">
+            <li><svg class="ic" aria-hidden="true"><use href="#i-headphones"/></svg><span>O som indica a direção: esquerda, direita, frente ou trás.</span></li>
+            <li><svg class="ic" aria-hidden="true"><use href="#i-vibrate"/></svg><span>Cada aviso tem um padrão de vibração próprio.</span></li>
+            <li><svg class="ic" aria-hidden="true"><use href="#i-volume"/></svg><span>Responda com os botões de volume, sem olhar a tela.</span></li>
+          </ul>
+          <div class="spacer"></div>
+          <button type="button" class="btn btn-primary btn-lg btn-block" id="btn-start" data-log="COMEÇAR">Começar
+            <svg class="ic" aria-hidden="true"><use href="#i-arrow-right"/></svg></button>
+          <p class="meta center">Protótipo acadêmico · IHC 2026 · rota, GPS e alertas são simulados.</p>
+        </section>
+
+        <!-- A1 (cont.). Onboarding em três etapas -->
+        <section class="screen" data-screen="onboarding" aria-labelledby="ob-title" hidden>
+          <div class="ob-progress">
+            <p class="eyebrow" id="ob-count">Etapa 1 de 3</p>
+            <ol class="dots" id="ob-dots" aria-label="Progresso da introdução"><li></li><li></li><li></li></ol>
+          </div>
+          <div class="ob-visual"><div class="ob-icon" aria-hidden="true"><svg class="ic"><use id="ob-icon" href="#i-headphones"/></svg></div></div>
+          <h1 id="ob-title" tabindex="-1">Coloque seus fones de ouvido</h1>
+          <p class="lead" id="ob-text"></p>
+          <div class="spacer"></div>
+          <div class="btn-row">
+            <button type="button" class="btn" id="ob-prev" data-log="ONBOARDING_VOLTAR"><svg class="ic" aria-hidden="true"><use href="#i-back"/></svg>Voltar</button>
+            <button type="button" class="btn btn-primary" id="ob-next" data-log="ONBOARDING_AVANÇAR">Avançar<svg class="ic" aria-hidden="true"><use href="#i-chev"/></svg></button>
+          </div>
+        </section>
+
+        <!-- A2. Treinamento sensorial -->
+        <section class="screen" data-screen="training" aria-labelledby="t-training" hidden>
+          <div>
+            <h1 id="t-training" tabindex="-1">Treino dos sinais</h1>
+            <p class="lead">Toque em cada sinal para ouvir e sentir como ele será na caminhada. Use fones de ouvido.</p>
+          </div>
+          <div class="api-notes" id="training-api"></div>
+          <div class="train-grid" id="train-grid" role="group" aria-label="Sinais para treinar"></div>
+          <div class="train-feedback" aria-label="Visualização do sinal atual">
+            <div class="card compact" data-widget="spatial"></div>
+            <div class="card compact" data-widget="vibe"></div>
+          </div>
+          <p class="train-now" id="train-now" role="status">Toque em um sinal para experimentar.</p>
+
+          <div>
+            <p class="label" id="dir-label">Explorar direções do som</p>
+            <div class="dir-row" role="group" aria-labelledby="dir-label">
+              <button type="button" class="btn" data-dir="frente">Frente</button>
+              <button type="button" class="btn" data-dir="tras">Trás</button>
+              <button type="button" class="btn" data-dir="esquerda">Esq.</button>
+              <button type="button" class="btn" data-dir="direita">Dir.</button>
+            </div>
+          </div>
+
+          <section class="card test-card" aria-labelledby="t-test">
+            <h2 id="t-test">Teste de escuta</h2>
+            <p class="muted small">Vamos tocar um som vindo de um lado só, sem fala e sem vibração.</p>
+            <button type="button" class="btn" id="test-play" data-log="TESTE_ESQUERDA_TOCAR"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Tocar som de teste</button>
+            <fieldset>
+              <legend>Você conseguiu ouvir o som à esquerda?</legend>
+              <div class="btn-row">
+                <button type="button" class="btn btn-ok" id="test-yes" data-log="TESTE_ESQUERDA_SIM">Sim, consegui</button>
+                <button type="button" class="btn" id="test-no" data-log="TESTE_ESQUERDA_NAO">Não consegui</button>
+              </div>
+            </fieldset>
+            <p class="result" id="test-result" role="status" hidden></p>
+            <div id="test-help" class="test-card" hidden>
+              <ul class="help-list">
+                <li>Confira se os fones estão conectados e com o lado <strong>L/E</strong> no ouvido esquerdo.</li>
+                <li>Aumente o volume do aparelho e o volume dos sinais abaixo.</li>
+                <li>Desative o “áudio mono” nas configurações de acessibilidade: ele impede o som espacial.</li>
+              </ul>
+              <div class="range">
+                <div class="range-top"><label for="test-volume">Volume dos sinais</label><output for="test-volume" id="test-volume-out">90%</output></div>
+                <input type="range" id="test-volume" min="0" max="1" step="0.05" value="0.9">
+              </div>
+              <button type="button" class="btn" id="test-repeat" data-log="TESTE_ESQUERDA_REPETIR"><svg class="ic" aria-hidden="true"><use href="#i-repeat"/></svg>Repetir o teste</button>
+            </div>
+          </section>
+
+          <button type="button" class="btn btn-primary btn-lg btn-block" id="to-destination" data-log="IR_PARA_DESTINO">Continuar para o destino<svg class="ic" aria-hidden="true"><use href="#i-chev"/></svg></button>
+        </section>
+
+        <!-- A3. Definição do destino -->
+        <section class="screen" data-screen="destination" aria-labelledby="t-dest" hidden>
+          <h1 id="t-dest" tabindex="-1">Para onde vamos?</h1>
+          <form id="dest-form" class="field" novalidate>
+            <label for="dest-input">Destino</label>
+            <div class="input-row">
+              <input class="input" id="dest-input" name="destino" type="text" autocomplete="off" placeholder="Ex.: Biblioteca Aurora" aria-describedby="mic-status dest-error">
+              <button type="button" class="btn mic-btn" id="mic-btn" aria-pressed="false" aria-label="Ditar destino por voz" data-log="MICROFONE">
+                <svg class="ic" aria-hidden="true"><use href="#i-mic"/></svg>
+              </button>
+            </div>
+            <p class="mic-status" id="mic-status" role="status"></p>
+            <p class="error" id="dest-error" hidden><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg><span>Digite um destino ou escolha uma rota salva.</span></p>
+            <button type="submit" class="btn btn-primary btn-block" style="margin-top:10px" data-log="DESTINO_CONTINUAR">Continuar</button>
+          </form>
+          <section aria-labelledby="t-saved" style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <h2 id="t-saved">Rotas salvas</h2>
+              <p class="muted small">Dados de demonstração: destinos fictícios.</p>
+            </div>
+            <ul class="routes" id="route-list"></ul>
+          </section>
+        </section>
+
+        <!-- A4. Resumo da rota -->
+        <section class="screen" data-screen="summary" aria-labelledby="sum-dest" hidden>
+          <div>
+            <p class="eyebrow">Resumo da rota</p>
+            <h1 id="sum-dest" tabindex="-1">—</h1>
+          </div>
+          <div class="chips" id="sum-badges"></div>
+          <dl class="kv">
+            <div><dt><svg class="ic" aria-hidden="true"><use href="#i-route"/></svg>Distância total</dt><dd id="sum-distance">—</dd></div>
+            <div><dt><svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg>Tempo estimado</dt><dd id="sum-time">—</dd></div>
+            <div><dt><svg class="ic" aria-hidden="true"><use href="#i-crossing"/></svg>Travessias</dt><dd id="sum-crossings">—</dd></div>
+            <div><dt><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg>Alertas previstos</dt><dd id="sum-alerts">—</dd></div>
+          </dl>
+          <ul class="alert-list" id="sum-alert-list" aria-label="Alertas previstos na rota"></ul>
+          <p class="note">Rota, GPS e alertas são <strong>simulados</strong>. O SoundPath não detecta perigos reais. Teste apenas em ambiente controlado e com supervisão.</p>
+          <div class="spacer"></div>
+          <button type="button" class="btn btn-primary btn-lg btn-block" id="start-nav" data-log="INICIAR_E_GUARDAR">
+            <svg class="ic" aria-hidden="true"><use href="#i-pocket"/></svg>Iniciar e guardar o celular</button>
+          <button type="button" class="btn btn-ghost btn-block" id="change-dest" data-log="ALTERAR_DESTINO">Alterar destino</button>
+          <p class="meta center" id="sum-mode">Modo de execução: automático</p>
+        </section>
+
+        <!-- A5. Modo bolso (participante não precisa mais da tela) -->
+        <section class="screen screen-pocket" data-screen="pocket" aria-labelledby="t-pocket" hidden>
+          <div class="pocket-top">
+            <span class="state-badge js-state" data-state="PARADO"></span>
+            <button type="button" class="link-btn" id="end-route" data-log="ENCERRAR_ROTA">Encerrar rota</button>
+          </div>
+          <div class="pocket-msg">
+            <span class="ic-wrap" aria-hidden="true"><svg class="ic"><use href="#i-pocket"/></svg></span>
+            <h1 id="t-pocket" tabindex="-1">Pode guardar o celular.</h1>
+            <p>Durante a caminhada, use apenas os sons e as vibrações.</p>
+          </div>
+          <div class="vol-pair" role="group" aria-label="Botões de volume simulados">
+            <button type="button" class="btn vol-btn" data-vol="up" data-src="botão na tela" aria-label="Volume mais: confirmar">
+              <span class="vol-sign" aria-hidden="true">+</span>
+              <span class="vol-text"><strong>Volume +</strong><span>Confirmar decisão</span></span>
+            </button>
+            <button type="button" class="btn vol-btn" data-vol="down" data-src="botão na tela" aria-label="Volume menos: repetir última instrução">
+              <span class="vol-sign" aria-hidden="true">−</span>
+              <span class="vol-text"><strong>Volume −</strong><span>Repetir instrução</span></span>
+            </button>
+          </div>
+          <p class="kbd-hint">Simulam os botões físicos. Teclado: <kbd>↑</kbd>/<kbd>+</kbd> confirma · <kbd>↓</kbd>/<kbd>−</kbd> repete</p>
+          <div class="pocket-panel">
+            <button type="button" class="btn disclosure" id="toggle-panel" aria-expanded="false" aria-controls="mobile-slot" data-log="PAINEL_SENSORIAL_MOBILE">
+              <span>Painel sensorial do avaliador</span><svg class="ic ic-chev" aria-hidden="true"><use href="#i-chev"/></svg>
+            </button>
+            <div id="mobile-slot"></div>
+          </div>
+        </section>
+
+        <!-- B9. Chegada / encerramento -->
+        <section class="screen" data-screen="arrival" aria-labelledby="arr-title" hidden>
+          <div class="arrive-icon" id="arr-icon" aria-hidden="true"><svg class="ic"><use id="arr-icon-use" href="#i-flag"/></svg></div>
+          <div class="center">
+            <h1 id="arr-title" tabindex="-1">Você chegou!</h1>
+            <p class="lead" id="arr-dest">—</p>
+          </div>
+          <dl class="kv" id="arr-stats"></dl>
+          <div class="spacer"></div>
+          <button type="button" class="btn btn-primary btn-lg btn-block" id="new-route" data-log="NOVA_ROTA"><svg class="ic" aria-hidden="true"><use href="#i-restart"/></svg>Nova rota</button>
+          <button type="button" class="btn btn-ghost btn-block" id="open-logs" data-log="VER_REGISTROS"><svg class="ic" aria-hidden="true"><use href="#i-log"/></svg>Ver registros do teste</button>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- =============================== PAINEL DO AVALIADOR =============================== -->
+<aside class="drawer" id="drawer" aria-labelledby="drawer-title" hidden>
+  <div class="drawer-head">
+    <div style="flex:1">
+      <h2 id="drawer-title" tabindex="-1">Painel do avaliador</h2>
+      <p class="muted">Wizard of Oz · uso exclusivo do avaliador · <kbd>Esc</kbd> fecha</p>
+    </div>
+    <button type="button" class="btn icon-btn" id="drawer-close" aria-label="Fechar painel do avaliador" data-log="FECHAR_PAINEL"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></button>
+  </div>
+  <div class="drawer-status" aria-label="Situação atual">
+    <span class="state-badge js-state" data-state="PARADO"></span>
+    <span id="drawer-runner">Timeline parada</span>
+  </div>
+  <div class="tabs" role="tablist" aria-label="Seções do painel do avaliador">
+    <button type="button" role="tab" class="tab" id="tab-demo" aria-controls="panel-demo" aria-selected="true" data-log="ABA_DEMO">Demo</button>
+    <button type="button" role="tab" class="tab" id="tab-events" aria-controls="panel-events" aria-selected="false" tabindex="-1" data-log="ABA_EVENTOS">Eventos</button>
+    <button type="button" role="tab" class="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="false" tabindex="-1" data-log="ABA_AJUSTES">Ajustes</button>
+    <button type="button" role="tab" class="tab" id="tab-logs" aria-controls="panel-logs" aria-selected="false" tabindex="-1" data-log="ABA_REGISTROS">Registros <span class="count" id="log-count">0</span></button>
+  </div>
+
+  <!-- 11.5 Demonstração rápida -->
+  <section class="tabpanel" role="tabpanel" id="panel-demo" aria-labelledby="tab-demo" tabindex="0">
+    <button type="button" class="btn btn-primary btn-lg btn-block" id="demo-start" data-log="DEMO_INICIAR">▶ Iniciar demonstração rápida</button>
+    <div class="card demo-card" aria-labelledby="demo-h">
+      <h3 id="demo-h">Demonstração do SoundPath</h3>
+      <p class="demo-now" id="demo-current">Nenhuma demonstração em andamento</p>
+      <div class="pbar" role="progressbar" aria-label="Progresso da demonstração" aria-valuemin="0" aria-valuemax="9" aria-valuenow="0" id="demo-pbar"><span class="pbar-fill" id="demo-pbar-fill"></span></div>
+      <dl class="demo-dl">
+        <dt>Progresso</dt><dd id="demo-count">0 de 9 eventos</dd>
+        <dt>Próximo</dt><dd id="demo-next">—</dd>
+        <dt>Estado</dt><dd id="demo-state">Parado</dd>
+        <dt>Situação</dt><dd id="demo-status">Parada</dd>
+      </dl>
+      <div class="waiting-box" id="demo-waiting" hidden>
+        <strong>Aguardando o participante pressionar Volume +.</strong>
+        <span class="small">Volume − repete a instrução. Sem participante? Avance como avaliador.</span>
+        <button type="button" class="btn" data-action="skip" data-log="DEMO_AVANCAR_DECISAO"><svg class="ic" aria-hidden="true"><use href="#i-skip"/></svg>Avançar como avaliador</button>
+      </div>
+      <div class="grid3">
+        <button type="button" class="btn" data-action="pause" data-log="DEMO_PAUSAR"><svg class="ic" aria-hidden="true"><use href="#i-pause"/></svg>Pausar</button>
+        <button type="button" class="btn" data-action="resume" data-log="DEMO_RETOMAR"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Retomar</button>
+        <button type="button" class="btn" data-action="skip" data-log="DEMO_PULAR"><svg class="ic" aria-hidden="true"><use href="#i-skip"/></svg>Pular</button>
+      </div>
+      <div class="grid2">
+        <button type="button" class="btn" id="demo-restart" data-log="DEMO_REINICIAR"><svg class="ic" aria-hidden="true"><use href="#i-restart"/></svg>Reiniciar</button>
+        <button type="button" class="btn btn-danger" id="demo-end" data-log="DEMO_ENCERRAR"><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg>Encerrar</button>
+      </div>
+      <div class="range">
+        <div class="range-top"><label for="set-demoInterval">Intervalo após cada evento</label><output id="out-demoInterval" for="set-demoInterval">5 s</output></div>
+        <input type="range" id="set-demoInterval" data-setting="demoInterval" min="2" max="15" step="1" value="5">
+      </div>
+      <ol class="demo-steps" id="demo-steps" aria-label="Sequência da demonstração"></ol>
+    </div>
+    <p class="meta">A demonstração usa exatamente os mesmos módulos da navegação (AudioEngine, HapticEngine, RouteSimulator e StateMachine). No B6 ela aguarda a decisão do participante.</p>
+  </section>
+
+  <!-- 11.1 / 11.2 Controle de eventos e modo de execução -->
+  <section class="tabpanel" role="tabpanel" id="panel-events" aria-labelledby="tab-events" tabindex="0" hidden>
+    <fieldset class="plain">
+      <legend>Modo de execução</legend>
+      <div class="seg-control">
+        <label><input type="radio" name="run-mode" value="auto" checked><span>Automático</span></label>
+        <label><input type="radio" name="run-mode" value="manual"><span>Manual</span></label>
+      </div>
+      <p class="meta" id="mode-help">Automático: executa a timeline B1–B9 e para nas decisões pendentes.</p>
+    </fieldset>
+    <div class="grid2">
+      <button type="button" class="btn btn-primary" id="run-auto" data-log="TIMELINE_INICIAR"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Iniciar timeline</button>
+      <button type="button" class="btn btn-danger" id="end-nav" data-log="ENCERRAR_NAVEGACAO"><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg>Encerrar</button>
+      <button type="button" class="btn" data-action="pause" data-log="PAUSAR"><svg class="ic" aria-hidden="true"><use href="#i-pause"/></svg>Pausar</button>
+      <button type="button" class="btn" data-action="resume" data-log="RETOMAR"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Retomar</button>
+    </div>
+    <div>
+      <h3 style="margin-bottom:8px">Eventos da rota (B)</h3>
+      <div class="grid2" id="ev-route"></div>
+    </div>
+    <div>
+      <h3 style="margin-bottom:8px">Exceções (C)</h3>
+      <div class="grid2" id="ev-exc"></div>
+    </div>
+    <div>
+      <h3 style="margin-bottom:8px">Simular botões do participante</h3>
+      <div class="grid2">
+        <button type="button" class="btn" data-vol="up" data-src="painel do avaliador">Volume + (confirmar)</button>
+        <button type="button" class="btn" data-vol="down" data-src="painel do avaliador">Volume − (repetir)</button>
+      </div>
+    </div>
+    <p class="meta">Cada botão dispara os mesmos mecanismos da execução automática: fala, áudio espacial, vibração, estado e registro. Transições inválidas são bloqueadas e registradas.</p>
+  </section>
+
+  <!-- 11.3 Configurações -->
+  <section class="tabpanel" role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" tabindex="0" hidden>
+    <div class="range">
+      <div class="range-top"><label for="set-speechRate">Velocidade da fala</label><output id="out-speechRate" for="set-speechRate">1,0×</output></div>
+      <input type="range" id="set-speechRate" data-setting="speechRate" min="0.5" max="2" step="0.1" value="1">
+    </div>
+    <div class="range">
+      <div class="range-top"><label for="set-masterVolume">Volume geral do áudio</label><output id="out-masterVolume" for="set-masterVolume">90%</output></div>
+      <input type="range" id="set-masterVolume" data-setting="masterVolume" min="0" max="1" step="0.05" value="0.9">
+    </div>
+    <div class="range">
+      <div class="range-top"><label for="set-beepVolume">Volume dos bipes periódicos</label><output id="out-beepVolume" for="set-beepVolume">35%</output></div>
+      <input type="range" id="set-beepVolume" data-setting="beepVolume" min="0" max="1" step="0.05" value="0.35">
+    </div>
+    <div class="range">
+      <div class="range-top"><label for="set-beepInterval">Intervalo dos bipes periódicos</label><output id="out-beepInterval" for="set-beepInterval">3,0 s</output></div>
+      <input type="range" id="set-beepInterval" data-setting="beepInterval" min="1" max="10" step="0.5" value="3">
+    </div>
+    <div class="range">
+      <div class="range-top"><label for="set-autoInterval">Intervalo da timeline automática</label><output id="out-autoInterval" for="set-autoInterval">7 s</output></div>
+      <input type="range" id="set-autoInterval" data-setting="autoInterval" min="2" max="30" step="1" value="7">
+    </div>
+    <div class="field">
+      <label for="set-spatialMode">Espacialização</label>
+      <select class="select" id="set-spatialMode" data-setting="spatialMode">
+        <option value="hrtf">HRTF 3D (PannerNode)</option>
+        <option value="stereo">Estéreo simples (StereoPannerNode)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="set-gpsStrategy">Recuperação no GPS fraco (C1)</label>
+      <select class="select" id="set-gpsStrategy" data-setting="gpsStrategy">
+        <option value="manter">Manter navegação (NAVEGANDO)</option>
+        <option value="pausar">Pausar navegação (PAUSADO)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="set-alertPattern">Padrão de vibração de alerta (B5, C1, C3) em ms</label>
+      <div class="input-row">
+        <input class="input" id="set-alertPattern" type="text" inputmode="numeric" aria-describedby="alert-pattern-help">
+        <button type="button" class="btn" id="apply-alert" data-log="APLICAR_PADRAO_ALERTA">Aplicar</button>
+      </div>
+      <p class="meta" id="alert-pattern-help">Valores alternam vibração e pausa, começando por vibração. Ex.: 300, 150, 300</p>
+    </div>
+    <label class="check"><input type="checkbox" id="set-ariaLive" data-setting="ariaLive" checked><span>Anunciar legendas a leitores de tela (aria-live). Desative se o participante usa leitor de tela e a voz do SoundPath já basta, evitando fala duplicada.</span></label>
+    <div class="grid2">
+      <button type="button" class="btn" id="test-voice" data-log="TESTAR_VOZ"><svg class="ic" aria-hidden="true"><use href="#i-volume"/></svg>Testar voz</button>
+      <button type="button" class="btn" id="test-dirs" data-log="TESTAR_DIRECOES"><svg class="ic" aria-hidden="true"><use href="#i-headphones"/></svg>Testar direções</button>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:8px">Diagnóstico das APIs</h3>
+      <ul class="diag" id="diag"></ul>
+    </div>
+  </section>
+
+  <!-- 11.4 Registros -->
+  <section class="tabpanel" role="tabpanel" id="panel-logs" aria-labelledby="tab-logs" tabindex="0" hidden>
+    <div class="field">
+      <label for="participant">Identificação do participante</label>
+      <input class="input" id="participant" type="text" placeholder="Ex.: P01" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="log-filter">Mostrar</label>
+      <select class="select" id="log-filter">
+        <option value="all">Todos os registros</option>
+        <option value="events">Eventos, exceções e transições</option>
+        <option value="participant">Ações do participante e decisões</option>
+        <option value="buttons">Botões pressionados</option>
+        <option value="system">Sistema, demonstração e timeline</option>
+      </select>
+    </div>
+    <div class="log-tools">
+      <button type="button" class="btn btn-primary" id="export-csv" data-log="EXPORTAR_CSV"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg>Exportar log (.csv)</button>
+      <button type="button" class="btn btn-danger" id="clear-logs" data-log="LIMPAR_REGISTROS"><svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg>Limpar</button>
+    </div>
+    <p class="meta" id="log-summary">0 registros nesta sessão.</p>
+    <ol class="log-list" id="log-list" aria-label="Registros em ordem cronológica"></ol>
+  </section>
+</aside>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<dialog class="dlg" id="confirm-dialog" aria-labelledby="dlg-title" aria-describedby="dlg-body">
+  <h2 id="dlg-title">Confirmar</h2>
+  <div class="dlg-body" id="dlg-body"></div>
+  <div class="btn-row">
+    <button type="button" class="btn" id="dlg-cancel" data-log="DIALOGO_CANCELAR">Cancelar</button>
+    <button type="button" class="btn btn-primary" id="dlg-ok" data-log="DIALOGO_CONFIRMAR">Confirmar</button>
+  </div>
+</dialog>
+
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================================
+   0. UTILITÁRIOS E BARRAMENTO DE EVENTOS
+   ===================================================================================== */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const pad2 = (n) => String(n).padStart(2, '0');
+const fmtClock = (sec) => { sec = Math.max(0, Math.round(sec)); return `${pad2(Math.floor(sec / 60))}:${pad2(sec % 60)}`; };
+const fmtDist = (m) => (m >= 1000 ? `${(m / 1000).toFixed(2).replace('.', ',')} km` : `${Math.round(m)} m`);
+const fmtDec = (n, d = 1) => Number(n).toFixed(d).replace('.', ',');
+const icon = (id, cls = '') => `<svg class="ic ${cls}" aria-hidden="true" focusable="false"><use href="#${id}"/></svg>`;
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/** Barramento pub/sub: módulos publicam fatos; a UI apenas escuta. Evita dependências circulares. */
+const Bus = (() => {
+  const handlers = new Map();
+  return {
+    on(evt, fn) { if (!handlers.has(evt)) handlers.set(evt, []); handlers.get(evt).push(fn); },
+    emit(evt, data) {
+      (handlers.get(evt) || []).forEach((fn) => { try { fn(data); } catch (err) { console.error('[Bus]', evt, err); } });
+    },
+  };
+})();
+const toast = (msg, tone = 'info') => Bus.emit('toast', { msg, tone });
+
+/* =====================================================================================
+   1. CONFIGURAÇÕES (alteradas no painel do avaliador; efeito imediato)
+   ===================================================================================== */
+const Settings = (() => {
+  const values = {
+    mode: 'auto',          // 'auto' | 'manual'
+    speechRate: 1,         // velocidade da fala
+    masterVolume: 0.9,     // volume geral (Web Audio + fala)
+    beepVolume: 0.35,      // volume do bipe periódico (B2)
+    beepInterval: 3,       // segundos entre bipes periódicos
+    autoInterval: 7,       // segundos entre eventos da timeline automática
+    demoInterval: 5,       // segundos entre eventos da demonstração rápida
+    spatialMode: 'hrtf',   // 'hrtf' | 'stereo'
+    gpsStrategy: 'manter', // recuperação do C1: 'manter' | 'pausar'
+    ariaLive: true,
+  };
+  return {
+    get: (k) => values[k],
+    set(k, v) { if (values[k] === v) return; const old = values[k]; values[k] = v; Bus.emit('settings', { key: k, value: v, old }); },
+  };
+})();
+
+/* =====================================================================================
+   2. CONFIGURAÇÃO CENTRALIZADA DOS PADRÕES HÁPTICOS (seção 10)
+   ÚNICA fonte dos arrays. Formato da Vibration API: [vibra, pausa, vibra, pausa, ...].
+   IHC — Consistência dos sinais: o número de pulsos acompanha o número de notas do som
+   (direita = 2 notas / 2 pulsos; esquerda = 3 / 3; chegada = curta, curta, longa).
+   ===================================================================================== */
+const HAPTIC_PATTERNS = {
+  inicio:      { label: 'Uma longa',            pattern: [500] },
+  direita:     { label: 'Duas curtas',          pattern: [100, 100, 100] },
+  esquerda:    { label: 'Três curtas',          pattern: [100, 100, 100, 100, 100] },
+  chegou:      { label: 'Curta, curta, longa',  pattern: [100, 100, 100, 100, 500] },
+  perigo:      { label: 'Longa intermitente',   pattern: [600, 200, 600, 200, 600] },
+  confirmacao: { label: 'Uma curta',            pattern: [80] },
+  // Padrão de alerta configurável (B5 saída da rota, C1 GPS fraco, C3 fone desconectado).
+  alerta:      { label: 'Alerta (configurável)', pattern: [300, 150, 300] },
+};
+
+/** Direções do áudio espacial. Azimute em graus: 0 = frente, 90 = direita, ±180 = trás. */
+const DIRECTIONS = {
+  frente:          { az: 0,    label: 'Frente' },
+  direita:         { az: 90,   label: 'Direita' },
+  esquerda:        { az: -90,  label: 'Esquerda' },
+  tras:            { az: 180,  label: 'Trás' },
+  'esquerda-leve': { az: -45,  label: 'Esquerda leve' },
+};
+
+/** Metadados visuais dos estados: cor + ícone + texto (a cor nunca é o único indicador). */
+const STATE_META = {
+  PARADO:      { label: 'Parado',      icon: 'i-stop' },
+  NAVEGANDO:   { label: 'Navegando',   icon: 'i-nav' },
+  CHEGANDO:    { label: 'Chegando',    icon: 'i-pin' },
+  CHEGOU:      { label: 'Chegou',      icon: 'i-flag' },
+  PERIGO:      { label: 'Perigo',      icon: 'i-alert' },
+  CONFIRMACAO: { label: 'Confirmação', icon: 'i-check-circle' },
+  PAUSADO:     { label: 'Pausado',     icon: 'i-pause' },
+};
+
+/* -------------------------------------------------------------------------------------
+   Eventos da rota e exceções.
+   IHC — Hierarquia de alertas (priority): 1 informativo (bipe) < 2 navegação < 3 aviso
+   (saída de rota, GPS, chegada) < 4 perigo/decisão < 5 crítico (fone desconectado).
+   Uma fala de prioridade maior interrompe a menor; a menor aguarda a maior terminar.
+   ------------------------------------------------------------------------------------- */
+const EVENTS = {
+  B1:  { code: 'B1', group: 'B', title: 'Início da navegação', speech: 'Rota iniciada. Siga em frente por 200 metros.', sound: 'inicio', dir: 'frente', haptic: 'inicio', target: 'NAVEGANDO', priority: 2, milestone: 0 },
+  B2:  { code: 'B2', group: 'B', title: 'Seguindo corretamente', speech: null, sound: null, dir: 'frente', haptic: null, target: 'NAVEGANDO', priority: 1, milestone: 0.12, note: 'Bipe suave periódico vindo da frente (sem fala, sem vibração).' },
+  B3:  { code: 'B3', group: 'B', title: 'Conversão à direita', speech: 'Em 30 metros, vire à direita.', sound: 'direita', dir: 'direita', haptic: 'direita', target: 'NAVEGANDO', priority: 2, milestone: 0.27 },
+  B4:  { code: 'B4', group: 'B', title: 'Conversão à esquerda', speech: 'Em 30 metros, vire à esquerda.', sound: 'esquerda', dir: 'esquerda', haptic: 'esquerda', target: 'NAVEGANDO', priority: 2, milestone: 0.48 },
+  B5:  { code: 'B5', group: 'B', title: 'Saída da rota', speech: 'Você saiu do trajeto. Vire levemente para a esquerda.', sound: 'esquerda', dir: 'esquerda-leve', haptic: 'alerta', target: 'NAVEGANDO', priority: 3, alert: true, milestone: 0.58 },
+  B6T: { code: 'B6', variant: 'travessia', group: 'B', title: 'Perigo: travessia sem semáforo (simulado)', speech: 'Atenção: travessia sem semáforo à frente.', sound: 'perigo', dir: 'frente', haptic: 'perigo', target: 'PERIGO', priority: 4, alert: true, milestone: 0.7 },
+  B6R: { code: 'B6', variant: 'rota-alternativa', group: 'B', title: 'Perigo: oferta de rota alternativa (simulado)', speech: 'Região com histórico de assaltos. Rota alternativa disponível. Aperte volume mais para aceitar.', sound: 'perigo', dir: 'frente', haptic: 'perigo', target: 'PERIGO', priority: 4, alert: true, decision: true, milestone: 0.72 },
+  B7:  { code: 'B7', group: 'B', title: 'Confirmação da rota alternativa', speech: 'Rota alternativa confirmada.', sound: 'confirmacao', dir: 'frente', haptic: 'confirmacao', target: 'CONFIRMACAO', priority: 4, milestone: 0.74 },
+  B8:  { code: 'B8', group: 'B', title: 'Chegando ao destino', speech: 'Seu destino está a 20 metros, à sua direita.', sound: 'aproximacao', dir: 'direita', haptic: null, target: 'CHEGANDO', priority: 3, milestone: 0.97, cueAfterSpeech: true },
+  B9:  { code: 'B9', group: 'B', title: 'Chegada', speech: 'Você chegou ao seu destino.', sound: 'chegada', dir: 'direita', haptic: 'chegou', target: 'CHEGOU', priority: 3, milestone: 1 },
+  C1:  { code: 'C1', group: 'C', title: 'GPS fraco (simulado)', speech: 'Sinal de GPS fraco. Mantenha a direção atual.', sound: 'alerta', dir: 'frente', haptic: 'alerta', target: 'DINAMICO', priority: 3, alert: true },
+  C2:  { code: 'C2', group: 'C', title: 'Modo offline', speech: 'Modo offline ativado. Continuando pela rota salva.', sound: 'info', dir: 'frente', haptic: null, target: null, priority: 2 },
+  // C3: sem som pela Web Audio (o fone "sumiu"); a vibração garante a percepção do aviso.
+  C3:  { code: 'C3', group: 'C', title: 'Fone desconectado (simulado)', speech: 'Fone desconectado. Navegação pausada.', sound: null, dir: 'frente', haptic: 'alerta', target: 'PAUSADO', priority: 5, alert: true },
+};
+
+/** Rotas fictícias, claramente identificadas como dados de demonstração. */
+const ROUTES = [
+  { id: 'biblioteca', name: 'Biblioteca Aurora', distance: 620, crossings: 2, saved: true,
+    alerts: ['Travessia sem semáforo (simulada)', 'Trecho com alerta de segurança (simulado)'] },
+  { id: 'farmacia', name: 'Farmácia Ipê Amarelo', distance: 840, crossings: 3, saved: true,
+    alerts: ['Travessia sem semáforo (simulada)', 'Trecho com alerta de segurança (simulado)', 'Calçada estreita (simulada)'] },
+  { id: 'onibus', name: 'Ponto de ônibus Praça das Acácias', distance: 450, crossings: 1, saved: true,
+    alerts: ['Travessia sem semáforo (simulada)', 'Trecho com alerta de segurança (simulado)'] },
+];
+
+/* =====================================================================================
+   3. STATE MACHINE
+   Transições permitidas (qualquer outra é BLOQUEADA e registrada):
+     PARADO      → NAVEGANDO
+     NAVEGANDO   → NAVEGANDO (instrução), PERIGO, CHEGANDO, PAUSADO, PARADO
+     PERIGO      → PERIGO (repetição), CONFIRMACAO, NAVEGANDO (alerta concluído), PAUSADO, PARADO
+     CONFIRMACAO → NAVEGANDO, PAUSADO, PARADO
+     CHEGANDO    → CHEGANDO, CHEGOU, NAVEGANDO (desvio), PERIGO, PAUSADO, PARADO
+     PAUSADO     → PAUSADO, NAVEGANDO, CHEGANDO, PARADO
+     CHEGOU      → PARADO (nova rota)
+   PARADO a partir de qualquer estado = encerramento explícito (reset controlado).
+   IHC — Prevenção de erros: é impossível "chegar" sem antes "estar chegando" ou
+   confirmar uma rota alternativa que nunca foi oferecida.
+   ===================================================================================== */
+const StateMachine = (() => {
+  const TRANSITIONS = Object.freeze({
+    PARADO:      ['NAVEGANDO'],
+    NAVEGANDO:   ['NAVEGANDO', 'PERIGO', 'CHEGANDO', 'PAUSADO', 'PARADO'],
+    PERIGO:      ['PERIGO', 'CONFIRMACAO', 'NAVEGANDO', 'PAUSADO', 'PARADO'],
+    CONFIRMACAO: ['NAVEGANDO', 'PAUSADO', 'PARADO'],
+    CHEGANDO:    ['CHEGANDO', 'CHEGOU', 'NAVEGANDO', 'PERIGO', 'PAUSADO', 'PARADO'],
+    PAUSADO:     ['PAUSADO', 'NAVEGANDO', 'CHEGANDO', 'PARADO'],
+    CHEGOU:      ['PARADO'],
+  });
+  let state = 'PARADO';
+  let previous = null;
+  return {
+    TRANSITIONS,
+    get state() { return state; },
+    get previous() { return previous; },
+    can(to) { return (TRANSITIONS[state] || []).includes(to); },
+    transition(to, reason = '') {
+      if (!this.can(to)) { Bus.emit('state-rejected', { from: state, to, reason }); return { ok: false, from: state, to }; }
+      const from = state; previous = from; state = to;
+      Bus.emit('state', { from, to, reason });
+      return { ok: true, from, to };
+    },
+    /** Reinício controlado (encerrar / nova rota). Única transição "forçada", sempre registrada. */
+    reset(reason = 'reinício') {
+      const from = state; previous = from; state = 'PARADO';
+      Bus.emit('state', { from, to: 'PARADO', reason });
+      return { ok: true, from, to: 'PARADO' };
+    },
+  };
+})();
+
+/* =====================================================================================
+   4. LOGGER (registros em memória + CSV)
+   ===================================================================================== */
+const Logger = (() => {
+  const entries = [];
+  let seq = 0;
+  let participant = '';
+  const lastEventAt = {};
+  const stamp = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+
+  function add(e) {
+    const now = new Date();
+    let intervalo = '';
+    // "Tempo entre eventos": medido entre registros de EVENTO/EXCEÇÃO da mesma sessão.
+    if (e.tipo === 'EVENTO' || e.tipo === 'EXCEÇÃO') {
+      const k = e.sessao || '—';
+      if (lastEventAt[k]) intervalo = ((now - lastEventAt[k]) / 1000).toFixed(1);
+      lastEventAt[k] = now;
+    }
+    const entry = {
+      id: ++seq, ts: now, participante: participant, sessao: e.sessao || '—', tipo: e.tipo, codigo: e.codigo || '',
+      origem: e.origem || '', de: e.de || '', para: e.para || '', acao: e.acao || '', descricao: e.descricao || '', intervalo,
+    };
+    entries.push(entry);
+    Bus.emit('log', entry);
+    return entry;
+  }
+  function toCSV() {
+    const header = ['id', 'data_hora', 'participante', 'tipo_sessao', 'tipo_evento', 'codigo', 'origem', 'estado_anterior', 'estado_atual', 'acao_participante', 'descricao', 'intervalo_desde_evento_anterior_s'];
+    const cell = (v) => { const s = String(v ?? ''); return /[";\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const rows = entries.map((e) => [e.id, stamp(e.ts), e.participante, e.sessao, e.tipo, e.codigo, e.origem, e.de, e.para, e.acao, e.descricao, e.intervalo.replace('.', ',')]);
+    // BOM + ";" como separador: abre corretamente (com acentos) no Excel em pt-BR.
+    return '﻿' + [header, ...rows].map((r) => r.map(cell).join(';')).join('\r\n');
+  }
+  function download() {
+    const blob = new Blob([toCSV()], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const d = new Date();
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `soundpath-log-${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  }
+  return {
+    add, toCSV, download,
+    get entries() { return entries; },
+    clear() { entries.length = 0; Object.keys(lastEventAt).forEach((k) => delete lastEventAt[k]); Bus.emit('log-cleared'); },
+    setParticipant(p) { participant = p; },
+    stamp,
+  };
+})();
+
+/* =====================================================================================
+   5. AUDIO ENGINE — Web Audio (HRTF/estéreo), bipes, volume e fala pt-BR
+   ===================================================================================== */
+const AudioEngine = (() => {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const synth = ('speechSynthesis' in window) ? window.speechSynthesis : null;
+  const support = { webAudio: !!AC, hrtf: false, stereo: false, speech: !!(synth && window.SpeechSynthesisUtterance), voicePtBR: false, voiceName: '', ctxState: 'não iniciado' };
+  let ctx = null, master = null, cueBus = null, beepBus = null;
+  let voice = null;
+  const activeOsc = new Set();
+  let cueBusyUntil = 0;
+  let muted = false;           // sinais sonoros suspensos (ex.: fone desconectado)
+  let current = null;          // fala em andamento { priority, done, finish, ... }
+  let jobSeq = 0;
+  let beepTimer = null, beepOn = false, beepDir = 'frente', beepScale = 1, beepGrowth = false;
+  let beepGate = () => true;
+
+  /* ---------- Vozes ---------- */
+  function pickVoice() {
+    if (!synth) return;
+    const voices = synth.getVoices() || [];
+    if (!voices.length) return;
+    const norm = (v) => (v.lang || '').replace('_', '-').toLowerCase();
+    const ptbr = voices.filter((v) => norm(v) === 'pt-br');
+    voice = ptbr.find((v) => /google|luciana|francisca|thalita|maria|natural|online/i.test(v.name)) || ptbr[0]
+      || voices.find((v) => norm(v).startsWith('pt')) || null;
+    support.voicePtBR = !!(voice && norm(voice) === 'pt-br');
+    support.voiceName = voice ? `${voice.name} (${voice.lang})` : '';
+    emitSupport();
+  }
+  function emitSupport() { Bus.emit('audio-support', { ...support }); }
+  if (synth) {
+    pickVoice();
+    if (typeof synth.addEventListener === 'function') synth.addEventListener('voiceschanged', pickVoice);
+    else synth.onvoiceschanged = pickVoice;
+  }
+
+  /* ---------- Inicialização (sempre a partir de um gesto do usuário) ---------- */
+  function init() {
+    if (!AC) { emitSupport(); return Promise.resolve(false); }
+    if (!ctx) {
+      ctx = new AC();
+      master = ctx.createGain(); master.gain.value = Settings.get('masterVolume');
+      const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -12; comp.ratio.value = 4;
+      master.connect(comp); comp.connect(ctx.destination);
+      cueBus = ctx.createGain(); cueBus.gain.value = 0.9; cueBus.connect(master);
+      beepBus = ctx.createGain(); beepBus.gain.value = Settings.get('beepVolume'); beepBus.connect(master);
+      support.hrtf = typeof ctx.createPanner === 'function';
+      support.stereo = typeof ctx.createStereoPanner === 'function';
+      ctx.onstatechange = () => { support.ctxState = ctx.state; emitSupport(); };
+    }
+    const p = ctx.state === 'suspended' ? ctx.resume().catch(() => {}) : Promise.resolve();
+    return p.then(() => { support.ctxState = ctx.state; emitSupport(); return ctx.state === 'running'; });
+  }
+  /** Desbloqueia a síntese de voz no iOS/Safari: precisa ser chamado dentro do gesto. */
+  function prime() {
+    init();
+    if (!support.speech) return;
+    try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; u.lang = 'pt-BR'; synth.speak(u); } catch (e) { /* ignora */ }
+  }
+
+  /* ---------- Espacialização ---------- */
+  function modeLabel() {
+    if (!ctx) return support.webAudio ? 'Web Audio aguardando gesto' : 'Web Audio indisponível';
+    if (Settings.get('spatialMode') === 'hrtf' && support.hrtf) return 'HRTF 3D (PannerNode)';
+    if (support.stereo) return 'Estéreo (StereoPannerNode)';
+    return 'Mono (sem espacialização)';
+  }
+  function spatialNode(az) {
+    const rad = (az * Math.PI) / 180;
+    const x = Math.sin(rad), z = -Math.cos(rad); // ouvinte na origem olhando para -Z
+    if (Settings.get('spatialMode') === 'hrtf' && support.hrtf) {
+      const p = ctx.createPanner();
+      p.panningModel = 'HRTF'; p.distanceModel = 'inverse'; p.refDistance = 1; p.maxDistance = 50; p.rolloffFactor = 0.2;
+      const d = 1.2;
+      if (p.positionX) { p.positionX.value = x * d; p.positionY.value = 0; p.positionZ.value = z * d; }
+      else p.setPosition(x * d, 0, z * d);
+      return p;
+    }
+    if (support.stereo) { const s = ctx.createStereoPanner(); s.pan.value = clamp(x, -1, 1); return s; }
+    return ctx.createGain();
+  }
+
+  /* ---------- Síntese dos sons (curtos, suaves e distinguíveis) ---------- */
+  function tone(dest, o) {
+    const t0 = ctx.currentTime + (o.t || 0) + 0.02;
+    const osc = ctx.createOscillator();
+    osc.type = o.type || 'sine';
+    osc.frequency.setValueAtTime(o.f, t0);
+    if (o.f2) osc.frequency.exponentialRampToValueAtTime(o.f2, t0 + o.dur);
+    const env = ctx.createGain();
+    const peak = o.g ?? 0.5;
+    env.gain.setValueAtTime(0.0001, t0);
+    env.gain.linearRampToValueAtTime(peak, t0 + 0.012);         // ataque suave: sem cliques
+    env.gain.setValueAtTime(peak, t0 + o.dur * 0.55);
+    env.gain.exponentialRampToValueAtTime(0.0001, t0 + o.dur);  // decaimento suave
+    let out = env;
+    if (o.lp) { const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = o.lp; env.connect(f); out = f; }
+    osc.connect(env); out.connect(dest);
+    osc.start(t0); osc.stop(t0 + o.dur + 0.05);
+    activeOsc.add(osc);
+    osc.onended = () => { activeOsc.delete(osc); try { osc.disconnect(); env.disconnect(); out.disconnect(); } catch (e) { /* ok */ } };
+  }
+  /* IHC — Consistência: cada direção tem timbre próprio (além da posição), o que permite
+     distinguir frente/trás mesmo no modo estéreo, onde ambas soam no centro. */
+  const SOUND_DEFS = {
+    frente:      { label: 'Bipe duplo agudo', play: (d) => { tone(d, { f: 880, dur: 0.09, g: 0.5 }); tone(d, { f: 880, t: 0.16, dur: 0.09, g: 0.5 }); return 0.3; } },
+    direita:     { label: 'Duas notas ascendentes', play: (d) => { tone(d, { f: 660, f2: 990, type: 'triangle', dur: 0.12, g: 0.6 }); tone(d, { f: 660, f2: 990, type: 'triangle', t: 0.2, dur: 0.12, g: 0.6 }); return 0.38; } },
+    esquerda:    { label: 'Três notas descendentes', play: (d) => { for (let i = 0; i < 3; i++) tone(d, { f: 990, f2: 660, type: 'triangle', t: i * 0.18, dur: 0.11, g: 0.6 }); return 0.52; } },
+    tras:        { label: 'Tom grave descendente', play: (d) => { tone(d, { f: 392, f2: 262, type: 'sine', dur: 0.42, g: 0.65 }); return 0.46; } },
+    inicio:      { label: 'Tom longo ascendente', play: (d) => { tone(d, { f: 523, f2: 784, type: 'sine', dur: 0.5, g: 0.55 }); return 0.54; } },
+    perigo:      { label: 'Alarme intermitente', play: (d) => { for (let i = 0; i < 3; i++) tone(d, { f: i % 2 ? 622 : 932, type: 'square', lp: 1800, t: i * 0.3, dur: 0.24, g: 0.3 }); return 0.92; } },
+    alerta:      { label: 'Dois tons de alerta', play: (d) => { tone(d, { f: 740, type: 'square', lp: 1600, dur: 0.16, g: 0.28 }); tone(d, { f: 554, type: 'square', lp: 1600, t: 0.22, dur: 0.18, g: 0.28 }); return 0.44; } },
+    confirmacao: { label: 'Toque curto agudo', play: (d) => { tone(d, { f: 1175, dur: 0.14, g: 0.5 }); return 0.18; } },
+    chegada:     { label: 'Arpejo curto, curto, longo', play: (d) => { tone(d, { f: 523, dur: 0.1, g: 0.5 }); tone(d, { f: 659, t: 0.16, dur: 0.1, g: 0.5 }); tone(d, { f: 784, t: 0.32, dur: 0.5, g: 0.55 }); return 0.86; } },
+    info:        { label: 'Dois toques suaves', play: (d) => { tone(d, { f: 660, dur: 0.1, g: 0.4 }); tone(d, { f: 990, t: 0.15, dur: 0.12, g: 0.4 }); return 0.3; } },
+    beep:        { label: 'Bipe suave periódico', play: (d) => { tone(d, { f: 1000, dur: 0.06, g: 0.5 }); return 0.08; } },
+    aproximacao: { label: 'Pulsos com volume crescente', play: (d) => { const n = 7; for (let i = 0; i < n; i++) tone(d, { f: 880, type: 'triangle', t: i * 0.32, dur: 0.1, g: 0.06 + 0.64 * (i / (n - 1)) }); return n * 0.32; } },
+  };
+
+  /** Toca um som espacializado. Retorna a duração em ms (0 se não houver áudio). */
+  function playCue(name, dirKey, opts = {}) {
+    const def = SOUND_DEFS[name];
+    const dir = DIRECTIONS[dirKey] || DIRECTIONS.frente;
+    if (!def) return 0;
+    const info = { sound: name, soundLabel: def.label, dir: dirKey, az: dir.az, label: dir.label, periodic: !!opts.periodic, tone: name === 'perigo' ? 'danger' : '' };
+    if (!ctx || ctx.state !== 'running' || muted) {
+      const reason = !support.webAudio ? 'Web Audio indisponível' : muted ? 'sinais sonoros suspensos' : 'áudio ainda não liberado por gesto';
+      Bus.emit('spatial', { ...info, silent: true, reason, mode: modeLabel(), durationMs: 600 });
+      return 0;
+    }
+    const sp = spatialNode(dir.az);
+    const g = ctx.createGain();
+    g.gain.value = opts.gainScale ?? 1;
+    g.connect(sp); sp.connect(opts.periodic ? beepBus : cueBus);
+    const dur = def.play(g) * 1000;
+    setTimeout(() => { try { g.disconnect(); sp.disconnect(); } catch (e) { /* ok */ } }, dur + 500);
+    if (!opts.periodic) cueBusyUntil = performance.now() + dur + 150;
+    Bus.emit('spatial', { ...info, mode: modeLabel(), durationMs: dur });
+    return dur;
+  }
+
+  /* ---------- Fala (SpeechSynthesis pt-BR) com prioridades ---------- */
+  const estimateMs = (text) => (text.trim().split(/\s+/).length / 2.6 / Settings.get('speechRate')) * 1000 + 500;
+  const pub = (j) => ({ id: j.id, text: j.text, priority: j.priority, code: j.code, repeat: j.repeat, simulated: j.simulated, voice: support.voiceName });
+
+  /** Aguarda enquanto houver fala de prioridade MAIOR em andamento. */
+  async function waitTurn(priority) { while (current && current.priority > priority) { await current.done; } }
+
+  /**
+   * Fala um texto. Regras: (1) prioridade maior interrompe a menor; (2) menor espera a maior;
+   * (3) mesma prioridade substitui (instrução mais recente vale). Retorna {status}.
+   */
+  async function speak(text, opts = {}) {
+    const priority = opts.priority ?? 2;
+    await waitTurn(priority);
+    if (opts.valid && !opts.valid()) return { status: 'cancelada' };
+    if (current) interruptSpeech();
+    const job = { id: ++jobSeq, text, priority, code: opts.code || '', repeat: !!opts.repeat, simulated: !support.speech };
+    job.done = new Promise((r) => { job.resolve = r; });
+    let finished = false;
+    job.finish = (status) => {
+      if (finished) return; finished = true;
+      clearTimeout(job.watchdog);
+      if (current === job) current = null;
+      Bus.emit('speech', { ...pub(job), status });
+      job.resolve({ status });
+    };
+    current = job;
+    Bus.emit('speech', { ...pub(job), status: 'falando' });
+    if (support.speech) {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'pt-BR'; if (voice) u.voice = voice;
+      u.rate = Settings.get('speechRate'); u.pitch = 1; u.volume = clamp(Settings.get('masterVolume'), 0, 1);
+      u.onend = () => job.finish('concluída');
+      u.onerror = (e) => {
+        if (e.error === 'interrupted' || e.error === 'canceled') { job.finish('interrompida'); return; }
+        // Falha da síntese (ex.: bloqueio por falta de gesto): mantém o ritmo como fala simulada.
+        clearTimeout(job.watchdog);
+        Bus.emit('speech-error', { error: e.error });
+        job.watchdog = setTimeout(() => job.finish('simulada'), estimateMs(text));
+      };
+      // Vigia: alguns navegadores não disparam onend.
+      job.watchdog = setTimeout(() => job.finish('concluída'), estimateMs(text) * 2 + 2500);
+      try { if (synth.paused) synth.resume(); synth.speak(u); } catch (err) { job.finish('erro'); }
+    } else {
+      job.watchdog = setTimeout(() => job.finish('simulada'), estimateMs(text));
+    }
+    return job.done;
+  }
+  function interruptSpeech() {
+    const j = current;
+    if (!j) return;
+    current = null;
+    if (support.speech) { try { synth.cancel(); } catch (e) { /* ok */ } }
+    j.finish('interrompida');
+  }
+  function stopAll() {
+    interruptSpeech();
+    activeOsc.forEach((o) => { try { o.stop(); } catch (e) { /* ok */ } });
+    activeOsc.clear();
+    cueBusyUntil = 0;
+  }
+
+  /* ---------- Bipe periódico (B2) ----------
+     IHC — Redução da carga cognitiva: o bipe é discreto e NUNCA toca durante uma fala ou
+     um som de instrução, para não competir com informações importantes. */
+  function beepTick() {
+    beepTimer = null;
+    if (!beepOn) return;
+    if (beepGate() && !current && performance.now() >= cueBusyUntil && !muted && ctx && ctx.state === 'running') {
+      playCue('beep', beepDir, { periodic: true, gainScale: beepScale });
+      Bus.emit('beep', { dir: beepDir, scale: beepScale });
+      if (beepGrowth) beepScale = Math.min(1.9, beepScale + 0.15); // CHEGANDO: volume crescente
+    }
+    beepTimer = setTimeout(beepTick, Settings.get('beepInterval') * 1000);
+  }
+  function startBeep() { beepOn = true; clearTimeout(beepTimer); beepTimer = setTimeout(beepTick, 250); Bus.emit('beep-state', { on: true }); }
+  function stopBeep() { beepOn = false; clearTimeout(beepTimer); beepTimer = null; Bus.emit('beep-state', { on: false }); }
+
+  Bus.on('settings', ({ key, value }) => {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    if (key === 'masterVolume') master.gain.setTargetAtTime(value, now, 0.05);
+    if (key === 'beepVolume') beepBus.gain.setTargetAtTime(value, now, 0.05);
+    if (key === 'beepInterval' && beepOn) { clearTimeout(beepTimer); beepTimer = setTimeout(beepTick, value * 1000); }
+  });
+
+  return {
+    support, init, prime, playCue, speak, waitTurn, stopAll, interruptSpeech, modeLabel,
+    isSpeaking: () => !!current,
+    isBusy: () => !!current || performance.now() < cueBusyUntil,
+    startBeep, stopBeep,
+    isBeeping: () => beepOn,
+    setBeepProfile({ dir = 'frente', growth = false, scale = 1 } = {}) { beepDir = dir; beepGrowth = growth; beepScale = scale; },
+    setBeepGate(fn) { beepGate = fn; },
+    setMuted(v) { muted = !!v; if (muted) { activeOsc.forEach((o) => { try { o.stop(); } catch (e) { /* ok */ } }); } },
+    soundLabel: (n) => (SOUND_DEFS[n] ? SOUND_DEFS[n].label : ''),
+    emitSupport,
+  };
+})();
+
+/* =====================================================================================
+   6. HAPTIC ENGINE — navigator.vibrate() + simulador visual sincronizado
+   ===================================================================================== */
+const HapticEngine = (() => {
+  const supported = typeof navigator.vibrate === 'function';
+  let token = 0;
+  let timers = [];
+  const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
+
+  function describe(key) {
+    const d = HAPTIC_PATTERNS[key];
+    if (!d) return null;
+    return { key, label: d.label, pattern: d.pattern.slice(), total: d.pattern.reduce((a, b) => a + b, 0) };
+  }
+  /** Executa um padrão: o MESMO array vai para a API e para o simulador visual. */
+  function play(key, meta = {}) {
+    const d = describe(key);
+    if (!d) return 0;
+    cancel(true); // cancela vibrações anteriores
+    const my = ++token;
+    let apiResult = false;
+    if (supported) { try { apiResult = navigator.vibrate(d.pattern); } catch (e) { apiResult = false; } }
+    Bus.emit('haptic-start', { ...d, supported, apiResult, source: meta.source || '' });
+    // Sincronização: percorre exatamente a alternância vibração/pausa do array.
+    let t = 0;
+    d.pattern.forEach((ms, i) => {
+      timers.push(setTimeout(() => { if (my === token) Bus.emit('haptic-seg', { index: i, on: i % 2 === 0, ms, key }); }, t));
+      t += ms;
+    });
+    timers.push(setTimeout(() => { if (my === token) Bus.emit('haptic-end', { key, completed: true }); }, t));
+    return d.total;
+  }
+  function cancel(silent) {
+    token++;
+    clearTimers();
+    if (supported) { try { navigator.vibrate(0); } catch (e) { /* ok */ } }
+    if (!silent) Bus.emit('haptic-end', { completed: false });
+  }
+  /** Atualiza o padrão configurável (validado). */
+  function setPattern(key, arr) {
+    if (!HAPTIC_PATTERNS[key]) return false;
+    if (!Array.isArray(arr) || !arr.length || arr.length > 15 || arr.some((n) => !Number.isFinite(n) || n < 0 || n > 5000)) return false;
+    HAPTIC_PATTERNS[key].pattern = arr.map((n) => Math.round(n));
+    Bus.emit('haptic-config', describe(key));
+    return true;
+  }
+  return { supported, play, cancel, describe, setPattern };
+})();
+
+/* =====================================================================================
+   7. ROUTE SIMULATOR — rota fictícia, eventos, timeline, demonstração rápida
+   ===================================================================================== */
+const RouteSimulator = (() => {
+  const SM = StateMachine;
+  const WALK_SPEED = 1.2; // m/s — ritmo de caminhada acessível
+  const SEQUENCE = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9'];
+  const SEQ_TITLES = {
+    B1: 'B1 — Início da navegação', B2: 'B2 — Seguindo corretamente', B3: 'B3 — Conversão à direita',
+    B4: 'B4 — Conversão à esquerda', B5: 'B5 — Saída da rota', B6: 'B6 — Perigo e rota alternativa',
+    B7: 'B7 — Confirmação (Volume +)', B8: 'B8 — Chegando ao destino', B9: 'B9 — Chegada',
+  };
+  const PAUSE_REASONS = { avaliador: 'pausa do avaliador', fone: 'fone desconectado', gps: 'GPS fraco' };
+  // Mensagens do sistema (não são eventos da rota; não substituem a "última instrução").
+  const SYS = {
+    PAUSE:       { code: 'SYS', speech: 'Navegação pausada.', sound: 'info', dir: 'frente', haptic: null, priority: 3 },
+    RESUME:      { code: 'SYS', speech: 'Navegação retomada.', sound: 'confirmacao', dir: 'frente', haptic: 'confirmacao', priority: 3 },
+    NO_DECISION: { code: 'SYS', speech: 'Nenhuma decisão pendente. Continue seguindo os sons.', sound: null, haptic: null, priority: 1 },
+    NOTHING:     { code: 'SYS', speech: 'Ainda não há instrução para repetir.', sound: null, haptic: null, priority: 1 },
+    FONE_STILL:  { code: 'SYS', speech: 'Fone ainda desconectado. Reconecte para continuar.', sound: null, haptic: 'alerta', priority: 3 },
+  };
+
+  const newStats = () => ({ alerts: 0, deviations: 0, confirmations: 0, repeats: 0, events: 0, pauses: 0 });
+  const nav = {
+    route: null, active: false, sessionType: 'PREPARAÇÃO', offline: false, gps: 'bom', headphones: true,
+    pending: null, b7Done: false, pausedReason: null, resumeState: null, progress: 0, stepIndex: -1,
+    currentStep: null, lastSpoken: null, generation: 0, startedAt: 0, stats: newStats(),
+  };
+  const runner = { token: 0, running: false, sessionType: null, index: 0, current: null, status: 'parada', skip: false, remainingMs: 0, steps: SEQUENCE.map(() => 'pendente') };
+
+  /* ---------- Registro ---------- */
+  function log(tipo, codigo, extra = {}) {
+    return Logger.add({
+      sessao: nav.sessionType, tipo, codigo,
+      de: extra.de ?? SM.state, para: extra.para ?? SM.state,
+      origem: extra.origem || '', acao: extra.acao || '', descricao: extra.descricao || '',
+    });
+  }
+  const emitConditions = () => Bus.emit('conditions', { offline: nav.offline, gps: nav.gps, headphones: nav.headphones, pausedReason: nav.pausedReason, active: nav.active, routeSaved: !!(nav.route && nav.route.saved) });
+  function emitProgress() {
+    const total = nav.route ? nav.route.distance : 0;
+    const done = total * nav.progress;
+    Bus.emit('progress', { progress: nav.progress, total, done, remaining: Math.max(0, total - done), step: nav.currentStep, stepNumber: nav.stepIndex + 1, steps: SEQUENCE.length, simSeconds: done / WALK_SPEED, active: nav.active });
+  }
+  function setProgress(p) { nav.progress = clamp(Math.max(nav.progress, p), 0, 1); emitProgress(); }
+  const milestoneOf = (code) => (code === 'B6' ? EVENTS.B6T.milestone : (EVENTS[code] ? EVENTS[code].milestone : 0)) || 0;
+
+  function emitRunner() {
+    Bus.emit('runner', {
+      running: runner.running, sessionType: runner.sessionType, index: runner.index, total: SEQUENCE.length,
+      current: runner.current, status: runner.status, remainingMs: runner.remainingMs, pending: !!nav.pending, steps: runner.steps.slice(),
+    });
+  }
+
+  /* ---------- Rota ---------- */
+  function setRoute(route) {
+    nav.route = route;
+    // Rota salva → estado de demonstração offline (dados no aparelho).
+    nav.offline = !!route.saved;
+    emitConditions(); emitProgress();
+  }
+  function begin(sessionType) {
+    if (!nav.route) setRoute(ROUTES[0]);
+    nav.generation++;
+    Object.assign(nav, {
+      active: true, sessionType, gps: 'bom', headphones: true, pending: null, b7Done: false, pausedReason: null,
+      resumeState: null, progress: 0, stepIndex: -1, currentStep: null, lastSpoken: null, startedAt: Date.now(), stats: newStats(),
+    });
+    nav.offline = !!nav.route.saved;
+    AudioEngine.setMuted(false); AudioEngine.stopBeep(); AudioEngine.setBeepProfile({ dir: 'frente', growth: false, scale: 1 });
+    if (SM.state !== 'PARADO') SM.reset('nova navegação');
+    log('SISTEMA', 'INÍCIO', { origem: 'SISTEMA', descricao: `Início da navegação — destino: ${nav.route.name} (${fmtDist(nav.route.distance)})${nav.route.saved ? ' · rota salva, modo offline de demonstração' : ''} · vibração ${HapticEngine.supported ? 'disponível' : 'indisponível (simulador visual)'}` });
+    Bus.emit('decision', null);
+    emitConditions(); emitProgress();
+    Bus.emit('navigation-start', { route: nav.route, sessionType });
+  }
+
+  /* ---------- Validação (prevenção de erros) ---------- */
+  function targetFor(key) {
+    if (key === 'C1') return Settings.get('gpsStrategy') === 'pausar' ? 'PAUSADO' : null;
+    const t = EVENTS[key].target;
+    return t || null;
+  }
+  function validate(key) {
+    const st = SM.state;
+    if (!nav.active) return 'A navegação não foi iniciada. Comece pelo B1 ou pelo resumo da rota.';
+    if (st === 'CHEGOU') return 'A rota já foi concluída. Inicie uma nova rota.';
+    if (st === 'PAUSADO' && !['C1', 'C2', 'C3'].includes(key)) return `Navegação pausada (${PAUSE_REASONS[nav.pausedReason] || 'pausa'}). Retome antes de disparar eventos da rota.`;
+    if (nav.pending && !['B7', 'B6R', 'C1', 'C2', 'C3'].includes(key)) return 'Há uma decisão pendente (rota alternativa). Aguarde o Volume + ou dispare B7.';
+    if (key === 'B7' && !nav.pending) return 'Não há rota alternativa pendente. Dispare o B6 (rota alternativa) antes.';
+    if (key === 'C3' && !nav.headphones) return 'O fone já está desconectado.';
+    const t = targetFor(key);
+    if (t && !SM.can(t)) return `Transição inválida: ${STATE_META[st].label} → ${STATE_META[t].label}.`;
+    if (!t && key === 'C1' && st === 'PARADO') return 'Dispare o B1 antes de simular o GPS fraco.';
+    return null;
+  }
+
+  /* ---------- Feedback multimodal (voz + som espacial + vibração) ----------
+     IHC — Redundância multimodal: toda instrução combina direção sonora, fala e vibração;
+     nenhuma informação depende de um único canal. */
+  async function feedback(ev, opts = {}) {
+    const gen = nav.generation;
+    const valid = () => gen === nav.generation;
+    await Promise.race([AudioEngine.init(), delay(400)]);
+    await AudioEngine.waitTurn(ev.priority || 2);
+    if (!valid()) return { status: 'cancelada' };
+    const t0 = performance.now();
+    const hapMs = ev.haptic ? HapticEngine.play(ev.haptic, { source: ev.code }) : 0;
+    let cueMs = 0;
+    if (ev.sound && !ev.cueAfterSpeech) cueMs = AudioEngine.playCue(ev.sound, ev.dir);
+    if (!ev.speech) Bus.emit('speech-note', { code: ev.code, note: ev.note || 'Sem fala' });
+    let res = { status: 'sem-fala' };
+    if (ev.speech) {
+      if (cueMs) await delay(Math.min(cueMs, 700)); // o som "aponta" a direção, a fala explica
+      if (!valid()) return { status: 'cancelada' };
+      res = await AudioEngine.speak(ev.speech, { priority: ev.priority || 2, code: ev.code, repeat: !!opts.repeat, valid });
+    }
+    if (ev.sound && ev.cueAfterSpeech && valid() && res.status !== 'interrompida') cueMs = AudioEngine.playCue(ev.sound, ev.dir);
+    const rest = Math.max(hapMs, ev.cueAfterSpeech ? 0 : cueMs) - (performance.now() - t0);
+    if (rest > 0) await delay(rest);
+    if (ev.cueAfterSpeech && cueMs) await delay(cueMs);
+    return res;
+  }
+
+  /* ---------- Execução de eventos (mesmo caminho para timeline, avaliador e demonstração) ---------- */
+  async function execute(key, opts = {}) {
+    const origem = opts.origem || 'AVALIADOR';
+    if (key === 'B6') return executeDanger(opts);
+    const ev = EVENTS[key];
+    if (!ev) return { ok: false, status: 'desconhecido' };
+    AudioEngine.init(); // chamado de forma síncrona dentro do gesto, quando houver
+    if (key === 'B1' && !nav.active) begin(opts.sessionType || (runner.running ? runner.sessionType : 'NAVEGAÇÃO_MANUAL'));
+    const from = SM.state;
+    const reason = validate(key);
+    if (reason) {
+      log('EVENTO_IGNORADO', ev.code, { origem, descricao: `${ev.title}: ${reason}` });
+      toast(reason, 'warn');
+      return { ok: false, status: 'rejeitado', reason };
+    }
+    const gen = nav.generation;
+    const target = targetFor(key);
+    if (target === 'PAUSADO' && from !== 'PAUSADO') nav.resumeState = from;
+    if (target) SM.transition(target, ev.title);
+    applyBefore(key, ev, origem, opts);
+    const codeLabel = ev.code + (ev.variant ? `/${ev.variant}` : '');
+    log(ev.group === 'C' ? 'EXCEÇÃO' : 'EVENTO', codeLabel, {
+      de: from, para: SM.state, origem, acao: origem === 'PARTICIPANTE' ? (opts.acao || '') : '',
+      descricao: ev.title + (ev.speech ? ` — “${ev.speech}”` : (ev.note ? ` — ${ev.note}` : '')),
+    });
+    if (ev.speech) nav.lastSpoken = ev;
+    if (ev.group === 'B') {
+      nav.currentStep = { code: ev.code, title: SEQ_TITLES[ev.code] || ev.title };
+      const idx = SEQUENCE.indexOf(ev.code);
+      nav.stepIndex = Math.max(nav.stepIndex, idx);
+      setProgress(ev.milestone || 0);
+    }
+    Bus.emit('event-executed', { key, code: ev.code, title: ev.title, origem });
+    const res = await feedback(ev);
+    if (gen !== nav.generation) return { ok: true, status: 'cancelada' };
+    applyAfter(key, ev, opts);
+    return { ok: true, status: res.status };
+  }
+
+  function applyBefore(key, ev, origem, opts) {
+    nav.stats.events++;
+    if (ev.alert) nav.stats.alerts++;
+    // Recuperação: qualquer instrução de rota após o GPS fraco indica sinal restabelecido.
+    if (ev.group === 'B' && key !== 'B2' && nav.gps === 'fraco' && SM.state !== 'PAUSADO') {
+      nav.gps = 'bom';
+      log('SISTEMA', 'C1', { origem: 'SISTEMA', descricao: 'Sinal de GPS restabelecido (simulado)' });
+    }
+    switch (key) {
+      case 'B2': AudioEngine.setBeepProfile({ dir: 'frente', growth: false, scale: 1 }); AudioEngine.startBeep(); break;
+      case 'B5': nav.stats.deviations++; log('SISTEMA', 'B5', { origem: 'SISTEMA', descricao: 'Saída do trajeto registrada (simulada)' }); break;
+      case 'B6R':
+        nav.pending = { type: 'rota-alternativa', since: Date.now() };
+        nav.b7Done = false;
+        Bus.emit('decision', nav.pending);
+        log('DECISÃO', 'B6', { origem: 'SISTEMA', descricao: 'Decisão pendente: Volume + aceita a rota alternativa; Volume − repete. Timeline automática suspensa.' });
+        break;
+      case 'B7':
+        nav.pending = null; nav.b7Done = true; nav.stats.confirmations++;
+        Bus.emit('decision', null);
+        log('DECISÃO', 'B7', {
+          origem, acao: origem === 'PARTICIPANTE' ? 'ACEITOU_ROTA_ALTERNATIVA (Volume +)' : '',
+          descricao: origem === 'PARTICIPANTE' ? 'Participante aceitou a rota alternativa' : 'Avaliador avançou a decisão (rota alternativa aceita por simulação)',
+        });
+        break;
+      case 'B8': AudioEngine.setBeepProfile({ dir: 'direita', growth: true, scale: 0.6 }); AudioEngine.startBeep(); break;
+      case 'C1':
+        nav.gps = 'fraco';
+        if (Settings.get('gpsStrategy') === 'pausar') { nav.pausedReason = 'gps'; nav.stats.pauses++; }
+        break;
+      case 'C2': nav.offline = true; break;
+      case 'C3':
+        nav.headphones = false; nav.pausedReason = 'fone'; nav.stats.pauses++;
+        AudioEngine.setMuted(true); // suspende sinais sonoros (a fala segue pelo alto-falante do aparelho)
+        break;
+      default: break;
+    }
+    emitConditions();
+  }
+
+  function applyAfter(key, ev, opts) {
+    if (key === 'B6T' && !opts.composite && SM.state === 'PERIGO' && !nav.pending) {
+      const r = SM.transition('NAVEGANDO', 'alerta de travessia concluído');
+      if (r.ok) log('TRANSIÇÃO', 'B6', { de: 'PERIGO', para: 'NAVEGANDO', origem: 'SISTEMA', descricao: 'Alerta de travessia concluído; navegação continua' });
+    }
+    if (key === 'B7' && SM.state === 'CONFIRMACAO') {
+      const r = SM.transition('NAVEGANDO', 'rota alternativa confirmada');
+      if (r.ok) log('TRANSIÇÃO', 'B7', { de: 'CONFIRMACAO', para: 'NAVEGANDO', origem: 'SISTEMA', descricao: 'Navegação retomada pela rota alternativa' });
+    }
+    if (key === 'B9') finish();
+  }
+
+  /** B6 completo: alerta de travessia → oferta de rota alternativa (aguarda decisão). */
+  async function executeDanger(opts = {}) {
+    const gen = nav.generation;
+    const skipping = () => opts.origem === 'TIMELINE' && runner.skip;
+    if (!nav.pending) {
+      const r1 = await execute('B6T', { ...opts, composite: true });
+      if (!r1.ok || gen !== nav.generation || SM.state !== 'PERIGO') return r1;
+      if (skipping()) {
+        if (SM.transition('NAVEGANDO', 'evento pulado').ok) log('TRANSIÇÃO', 'B6', { de: 'PERIGO', para: 'NAVEGANDO', origem: 'AVALIADOR', descricao: 'B6 pulado: navegação continua' });
+        return { ok: true, status: 'pulado' };
+      }
+      await delay(800);
+      if (gen !== nav.generation || SM.state !== 'PERIGO') return { ok: true, status: 'interrompida' };
+    }
+    return execute('B6R', opts);
+  }
+
+  /* ---------- Controles do participante (botões de volume) ----------
+     IHC — Controle do usuário: dois botões físicos, sem olhar a tela. Volume + sempre
+     significa "sim/confirmar"; Volume − sempre "repetir". Feedback falado imediato. */
+  function volumeUp(source) {
+    log('AÇÃO_PARTICIPANTE', 'VOL+', { origem: 'PARTICIPANTE', acao: `Volume + (${source})`, descricao: nav.pending ? 'Confirmação de decisão pendente' : 'Volume + sem decisão pendente' });
+    AudioEngine.init();
+    if (!nav.active) { toast(SM.state === 'CHEGOU' ? 'Rota concluída. Inicie uma nova rota.' : 'Os botões de volume controlam a navegação depois que a rota é iniciada.', 'info'); return; }
+    if (nav.pending) { execute('B7', { origem: 'PARTICIPANTE', acao: `Volume + (${source})` }); return; }
+    if (SM.state === 'PAUSADO') {
+      if (nav.pausedReason === 'fone') { feedback(SYS.FONE_STILL); return; }
+      resume('PARTICIPANTE'); return;
+    }
+    feedback(SYS.NO_DECISION);
+  }
+  function volumeDown(source) {
+    log('AÇÃO_PARTICIPANTE', 'VOL−', { origem: 'PARTICIPANTE', acao: `Volume − (${source})`, descricao: 'Pedido de repetição da última instrução' });
+    AudioEngine.init();
+    if (!nav.active) { toast('Ainda não há instrução para repetir: a navegação não está ativa.', 'info'); return; }
+    repeat('PARTICIPANTE');
+  }
+  function repeat(origem) {
+    const ev = nav.pending ? EVENTS.B6R : nav.lastSpoken;
+    if (!ev) { feedback(SYS.NOTHING); return; }
+    nav.stats.repeats++;
+    log('REPETIÇÃO', ev.code, { origem, descricao: `Repetição (fala + som espacial + vibração): “${ev.speech}”` });
+    feedback(ev, { repeat: true });
+  }
+
+  /* ---------- Pausa / retomada (recuperação de estados) ---------- */
+  function pause(origem = 'AVALIADOR') {
+    const st = SM.state;
+    if (!nav.active || ['PAUSADO', 'CHEGOU', 'PARADO'].includes(st)) { toast(st === 'PAUSADO' ? 'A navegação já está pausada.' : 'Não há navegação ativa para pausar.', 'warn'); return false; }
+    nav.resumeState = st; nav.pausedReason = 'avaliador'; nav.stats.pauses++;
+    AudioEngine.stopAll(); HapticEngine.cancel();
+    SM.transition('PAUSADO', 'pausa');
+    log('PAUSA', 'PAUSA', { de: st, para: 'PAUSADO', origem, descricao: runner.running ? 'Navegação e timeline pausadas' : 'Navegação pausada' });
+    emitConditions(); emitRunner();
+    feedback(SYS.PAUSE);
+    return true;
+  }
+  async function resume(origem = 'AVALIADOR') {
+    if (SM.state !== 'PAUSADO') { toast('A navegação não está pausada.', 'warn'); return false; }
+    const reason = nav.pausedReason;
+    nav.pausedReason = null;
+    if (!nav.headphones) {
+      nav.headphones = true; AudioEngine.setMuted(false);
+      log('SISTEMA', 'C3', { origem, descricao: 'Fone reconectado (simulado)' });
+    }
+    if (reason === 'gps') nav.gps = 'bom';
+    const target = nav.resumeState === 'CHEGANDO' ? 'CHEGANDO' : 'NAVEGANDO';
+    SM.transition(target, 'retomada');
+    log('RETOMADA', 'RETOMAR', { de: 'PAUSADO', para: target, origem, descricao: `Navegação retomada (motivo da pausa: ${PAUSE_REASONS[reason] || '—'})` });
+    emitConditions(); emitRunner();
+    const gen = nav.generation;
+    await feedback(SYS.RESUME);
+    // Decisão interrompida pela pausa é reapresentada: o participante não perde a escolha.
+    if (gen === nav.generation && nav.pending && SM.state === target) {
+      SM.transition('PERIGO', 'decisão reapresentada');
+      log('DECISÃO', 'B6', { de: target, para: 'PERIGO', origem: 'SISTEMA', descricao: 'Decisão pendente reapresentada após a retomada' });
+      await feedback(EVENTS.B6R);
+    }
+    return true;
+  }
+
+  /* ---------- Conclusão / encerramento ---------- */
+  function summary(arrived) {
+    const total = nav.route ? nav.route.distance : 0;
+    const done = arrived ? total : total * nav.progress;
+    return { arrived, route: nav.route, distanceDone: done, simSeconds: done / WALK_SPEED, realSeconds: nav.startedAt ? (Date.now() - nav.startedAt) / 1000 : 0, stats: { ...nav.stats }, sessionType: nav.sessionType };
+  }
+  function finish() {
+    if (runner.running) {
+      runner.steps = runner.steps.map((s, i) => (SEQUENCE[i] === 'B9' ? 'concluído' : s));
+      runner.index = SEQUENCE.length;
+      stopRunner('concluída');
+    }
+    AudioEngine.stopBeep();
+    nav.active = false; nav.pending = null;
+    setProgress(1);
+    log('SISTEMA', 'FIM', { origem: 'SISTEMA', descricao: `Rota concluída — ${nav.route.name} · ${fmtDist(nav.route.distance)} · ${nav.stats.alerts} alerta(s) · ${nav.stats.repeats} repetição(ões)` });
+    emitConditions();
+    Bus.emit('route-ended', summary(true));
+  }
+  function end(origem = 'AVALIADOR', opts = {}) {
+    const wasActive = nav.active;
+    if (runner.running) stopRunner(opts.runnerReason || 'encerrada');
+    nav.generation++; // invalida falas, atrasos e pós-efeitos pendentes
+    AudioEngine.stopAll(); AudioEngine.stopBeep(); HapticEngine.cancel(); AudioEngine.setMuted(false);
+    nav.pending = null; nav.pausedReason = null; nav.headphones = true;
+    Bus.emit('decision', null);
+    if (wasActive) log('SISTEMA', 'ENCERRAR', { origem, descricao: 'Navegação encerrada antes da chegada' });
+    const s = summary(false);
+    nav.active = false;
+    if (SM.state !== 'PARADO') SM.reset('encerramento');
+    emitConditions();
+    if (wasActive && !opts.silent) Bus.emit('route-ended', s);
+  }
+  function newRoute() {
+    if (nav.active) end('PARTICIPANTE', { silent: true });
+    if (SM.state === 'CHEGOU') SM.transition('PARADO', 'nova rota');
+    nav.sessionType = 'PREPARAÇÃO';
+    nav.progress = 0; nav.currentStep = null; nav.stepIndex = -1;
+    emitProgress();
+  }
+
+  /* ---------- Timeline (modo automático e demonstração rápida) ---------- */
+  const alive = (token) => token === runner.token;
+  async function waitUntil(pred, token) { while (alive(token) && !pred()) await delay(120); }
+
+  function stopRunner(reason = 'parada') {
+    if (!runner.running) return;
+    runner.token++;
+    runner.running = false;
+    runner.status = reason;
+    runner.remainingMs = 0;
+    const isDemo = runner.sessionType === 'DEMONSTRAÇÃO_RÁPIDA';
+    log(isDemo ? 'DEMONSTRAÇÃO' : 'TIMELINE', 'FIM', { origem: 'SISTEMA', descricao: `${isDemo ? 'Demonstração rápida' : 'Timeline automática'} ${reason}` });
+    emitRunner();
+  }
+
+  async function startRunner(sessionType, fromIndex = 0) {
+    if (runner.running) stopRunner('substituída por nova execução'); // nunca duas timelines simultâneas
+    const token = ++runner.token;
+    Object.assign(runner, {
+      running: true, sessionType, index: fromIndex, current: null, status: 'executando', skip: false, remainingMs: 0,
+      steps: SEQUENCE.map((c, i) => (i < fromIndex ? 'concluído' : 'pendente')),
+    });
+    nav.sessionType = sessionType;
+    const isDemo = sessionType === 'DEMONSTRAÇÃO_RÁPIDA';
+    log(isDemo ? 'DEMONSTRAÇÃO' : 'TIMELINE', 'INÍCIO', { origem: 'AVALIADOR', descricao: `${isDemo ? 'Demonstração rápida iniciada' : 'Timeline automática iniciada'} a partir de ${SEQUENCE[fromIndex] || '—'} · intervalo ${isDemo ? Settings.get('demoInterval') : Settings.get('autoInterval')} s` });
+    emitRunner();
+    try { await runLoop(token); } catch (err) { console.error(err); if (alive(token)) stopRunner('interrompida por erro'); }
+  }
+
+  async function runLoop(token) {
+    let retries = 0;
+    while (alive(token) && runner.index < SEQUENCE.length) {
+      if (SM.state === 'PAUSADO') { runner.status = 'pausada'; emitRunner(); }
+      await waitUntil(() => SM.state !== 'PAUSADO', token);
+      if (!alive(token)) return;
+      const i = runner.index;
+      const code = SEQUENCE[i];
+      runner.current = code; runner.steps[i] = 'executando'; runner.status = 'executando'; runner.skip = false;
+      emitRunner();
+
+      if (code === 'B7') {
+        // Etapa de decisão: a timeline fica SUSPENSA até o participante pressionar Volume +.
+        if (nav.pending) {
+          runner.status = 'aguardando-decisao'; runner.steps[i] = 'aguardando'; emitRunner();
+          await waitUntil(() => !nav.pending, token);
+          if (!alive(token)) return;
+        } else if (!nav.b7Done) {
+          runner.steps[i] = 'ignorado';
+          log('EVENTO_IGNORADO', 'B7', { origem: 'TIMELINE', descricao: 'Sem decisão pendente: etapa de confirmação ignorada' });
+        }
+        await waitUntil(() => SM.state !== 'CONFIRMACAO' && !AudioEngine.isSpeaking(), token);
+        if (!alive(token)) return;
+        if (runner.steps[i] !== 'ignorado') runner.steps[i] = 'concluído';
+      } else {
+        const res = await execute(code, { origem: 'TIMELINE', sessionType: runner.sessionType });
+        if (!alive(token)) return;
+        if (runner.skip) {
+          runner.skip = false; runner.steps[i] = 'ignorado';
+          log('EVENTO_IGNORADO', code, { origem: 'AVALIADOR', descricao: 'Evento pulado pelo avaliador durante a reprodução' });
+        } else if (res.status === 'interrompida' && code !== 'B9' && !(code === 'B6' && nav.pending) && retries < 3) {
+          // Recuperação: instrução interrompida por pausa/prioridade é repetida depois.
+          retries++; runner.steps[i] = 'pendente'; emitRunner();
+          continue;
+        } else if (!res.ok) {
+          runner.steps[i] = 'ignorado';
+        } else {
+          runner.steps[i] = 'concluído';
+        }
+      }
+      retries = 0;
+      if (code === 'B9') { runner.index = SEQUENCE.length; break; }
+      runner.index++;
+      emitRunner();
+      if (runner.index < SEQUENCE.length) await waitInterval(token);
+    }
+    if (alive(token)) stopRunner(SM.state === 'CHEGOU' ? 'concluída' : 'finalizada');
+  }
+
+  /** Intervalo pausável: não conta tempo durante pausa, fala ou decisão pendente. */
+  async function waitInterval(token) {
+    const from = nav.progress;
+    const to = milestoneOf(SEQUENCE[runner.index]);
+    let elapsed = 0;
+    let last = performance.now();
+    runner.status = 'intervalo';
+    while (alive(token)) {
+      await delay(100);
+      const now = performance.now(); const dt = now - last; last = now;
+      if (nav.pending) break; // decisão pendente: a próxima etapa (B7) assume a espera
+      if (runner.skip) { runner.skip = false; log('EVENTO_IGNORADO', 'INTERVALO', { origem: 'AVALIADOR', descricao: `Intervalo antes de ${SEQUENCE[runner.index]} pulado` }); break; }
+      if (SM.state === 'PAUSADO') { runner.status = 'pausada'; emitRunner(); continue; }
+      if (AudioEngine.isSpeaking() || nav.pending || SM.state === 'CONFIRMACAO') { runner.status = 'aguardando-fala'; emitRunner(); continue; }
+      runner.status = 'intervalo';
+      elapsed += dt;
+      const total = (runner.sessionType === 'DEMONSTRAÇÃO_RÁPIDA' ? Settings.get('demoInterval') : Settings.get('autoInterval')) * 1000;
+      runner.remainingMs = Math.max(0, total - elapsed);
+      if (to > from) setProgress(from + (to - from) * 0.85 * Math.min(1, elapsed / total));
+      emitRunner();
+      if (elapsed >= total) break;
+    }
+    runner.remainingMs = 0;
+  }
+
+  function skip() {
+    if (!runner.running) { toast('Nenhuma timeline em execução.', 'warn'); return; }
+    if (SM.state === 'PAUSADO') { toast('Retome a navegação antes de pular.', 'warn'); return; }
+    log('AÇÃO_AVALIADOR', 'PULAR', { origem: 'AVALIADOR', descricao: `Pular solicitado em ${runner.current || '—'} (${runner.status})` });
+    if (nav.pending) { execute('B7', { origem: 'AVALIADOR' }); return; }
+    runner.skip = true;
+    if (runner.status === 'executando') { AudioEngine.stopAll(); HapticEngine.cancel(); }
+  }
+
+  /** Modo automático a partir da etapa atual. */
+  function startAuto() {
+    AudioEngine.init();
+    if (!nav.active) begin('NAVEGAÇÃO_AUTOMÁTICA');
+    if (SM.state === 'CHEGOU') { toast('Rota concluída. Inicie uma nova rota.', 'warn'); return; }
+    const from = SM.state === 'PARADO' ? 0 : Math.min(SEQUENCE.length - 1, nav.stepIndex + 1);
+    startRunner('NAVEGAÇÃO_AUTOMÁTICA', from);
+  }
+  function beginManual() { AudioEngine.init(); if (!nav.active) begin('NAVEGAÇÃO_MANUAL'); }
+
+  /** Demonstração rápida: mesmos módulos, mesma máquina de estados, mesma rota. */
+  function startDemo() {
+    AudioEngine.init();
+    if (nav.active || runner.running) end('AVALIADOR', { silent: true, runnerReason: 'substituída pela demonstração' });
+    if (SM.state !== 'PARADO') SM.reset('demonstração');
+    if (!nav.route) setRoute(ROUTES[0]);
+    begin('DEMONSTRAÇÃO_RÁPIDA');
+    startRunner('DEMONSTRAÇÃO_RÁPIDA', 0);
+  }
+
+  // Bipe acompanha o estado: frente ao navegar, direita e crescente ao chegar; mudo nos demais.
+  AudioEngine.setBeepGate(() => (SM.state === 'NAVEGANDO' || SM.state === 'CHEGANDO') && nav.headphones);
+  Bus.on('state', ({ to }) => {
+    if (to === 'NAVEGANDO') AudioEngine.setBeepProfile({ dir: 'frente', growth: false, scale: 1 });
+    if (to === 'CHEGOU' || to === 'PARADO') AudioEngine.stopBeep();
+  });
+  Bus.on('settings', ({ key, value }) => {
+    if (key !== 'mode') return;
+    if (value === 'manual' && runner.running) stopRunner('interrompida: modo manual selecionado');
+    if (value === 'auto' && nav.active && !runner.running && !['CHEGOU'].includes(SM.state)) startAuto();
+  });
+
+  return {
+    SEQUENCE, SEQ_TITLES, WALK_SPEED, PAUSE_REASONS,
+    setRoute, execute, volumeUp, volumeDown, pause, resume, end, newRoute, skip,
+    startAuto, beginManual, startDemo, stopRunner,
+    get route() { return nav.route; },
+    isActive: () => nav.active,
+    isRunning: () => runner.running,
+    runnerInfo: () => ({ ...runner }),
+    sessionType: () => nav.sessionType,
+    hasPending: () => !!nav.pending,
+    emitAll() { emitConditions(); emitProgress(); emitRunner(); },
+  };
+})();
+
+/* =====================================================================================
+   8. PLATAFORMA — manter a tela ativa (Wake Lock), quando disponível
+   ===================================================================================== */
+const Platform = {
+  lock: null,
+  async keepAwake() {
+    if (!('wakeLock' in navigator)) return false;
+    try { this.lock = await navigator.wakeLock.request('screen'); return true; } catch (e) { return false; }
+  },
+  release() { try { if (this.lock) this.lock.release(); } catch (e) { /* ok */ } this.lock = null; },
+};
+
+/* =====================================================================================
+   9. DIÁLOGO DE CONFIRMAÇÃO (prevenção de erros) — <dialog> nativo, Esc cancela
+   ===================================================================================== */
+const ConfirmDialog = (() => {
+  const dlg = $('#confirm-dialog');
+  let resolver = null, onSync = null, returnFocus = null;
+  function close(value) {
+    if (dlg.open) dlg.close();
+    const r = resolver; resolver = null;
+    if (returnFocus && document.contains(returnFocus)) returnFocus.focus();
+    if (r) r(value);
+  }
+  $('#dlg-ok').addEventListener('click', () => { if (onSync) onSync(); close(true); });
+  $('#dlg-cancel').addEventListener('click', () => close(false));
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(false); });
+  return {
+    open({ title, body, confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false, onConfirmSync = null }) {
+      if (typeof dlg.showModal !== 'function') {
+        const ok = window.confirm(`${title}\n\n${body.replace(/<[^>]+>/g, '')}`);
+        if (ok && onConfirmSync) onConfirmSync();
+        return Promise.resolve(ok);
+      }
+      returnFocus = document.activeElement;
+      onSync = onConfirmSync;
+      $('#dlg-title').textContent = title;
+      $('#dlg-body').innerHTML = body;
+      const ok = $('#dlg-ok');
+      ok.textContent = confirmLabel;
+      ok.className = `btn ${danger ? 'btn-danger' : 'btn-primary'}`;
+      $('#dlg-cancel').textContent = cancelLabel;
+      dlg.showModal();
+      ok.focus();
+      return new Promise((r) => { resolver = r; });
+    },
+  };
+})();
+
+/* =====================================================================================
+   10. UI — telas, painel sensorial, diagrama espacial, simulador de vibração
+   ===================================================================================== */
+const UI = (() => {
+  const SCREENS = {
+    welcome:     { bar: false },
+    onboarding:  { title: 'Primeiros passos', back: 'welcome', step: 1 },
+    training:    { title: 'Treino dos sinais', back: 'onboarding', step: 2 },
+    destination: { title: 'Destino', back: 'training', step: 3 },
+    summary:     { title: 'Resumo da rota', back: 'destination', step: 4 },
+    pocket:      { bar: false },
+    arrival:     { bar: false },
+  };
+  const ONBOARDING = [
+    { icon: 'i-headphones', title: 'Coloque seus fones de ouvido', text: 'O som mostra a direção: ele vem da esquerda, da direita ou da frente. Fones estéreo permitem perceber de onde vem cada sinal.' },
+    { icon: 'i-pocket', title: 'Guarde o celular no bolso', text: 'Durante a caminhada você não precisa olhar nem tocar na tela. Voz, sons e vibrações guiam o caminho.' },
+    { icon: 'i-volume', title: 'Use os botões de volume', text: 'Volume + confirma uma decisão. Volume − repete a última instrução. Dois botões, sem procurar nada na tela.' },
+  ];
+  // IHC — Treino antes do uso real: o participante aprende o "vocabulário" sensorial.
+  const TRAINING = [
+    { key: 'direita', label: 'Direita', icon: 'i-arrow-right', sound: 'direita', dir: 'direita', haptic: 'direita', speech: 'Direita.' },
+    { key: 'esquerda', label: 'Esquerda', icon: 'i-arrow-left', sound: 'esquerda', dir: 'esquerda', haptic: 'esquerda', speech: 'Esquerda.' },
+    { key: 'chegada', label: 'Chegada', icon: 'i-flag', sound: 'chegada', dir: 'frente', haptic: 'chegou', speech: 'Chegada.' },
+    { key: 'perigo', label: 'Perigo', icon: 'i-alert', sound: 'perigo', dir: 'frente', haptic: 'perigo', speech: 'Perigo.' },
+    { key: 'confirmacao', label: 'Confirmação', icon: 'i-check-circle', sound: 'confirmacao', dir: 'frente', haptic: 'confirmacao', speech: 'Confirmado.' },
+  ];
+  let current = 'welcome';
+  let obStep = 0;
+
+  /* ---------- Widgets reutilizáveis ---------- */
+  const spatialMarkup = () => `
+    <div class="js-spatial spatial idle">
+      <svg class="sp-svg" viewBox="0 0 260 260" role="img" aria-label="Vista aérea da cabeça do usuário: o ponto luminoso indica de onde vem o som">
+        <circle cx="130" cy="130" r="88" class="sp-ring"/>
+        <circle cx="130" cy="130" r="54" class="sp-ring sp-ring-in"/>
+        <line x1="130" y1="36" x2="130" y2="224" class="sp-axis"/>
+        <line x1="36" y1="130" x2="224" y2="130" class="sp-axis"/>
+        <text x="130" y="22" class="sp-lbl" text-anchor="middle">FRENTE</text>
+        <text x="130" y="252" class="sp-lbl" text-anchor="middle">TRÁS</text>
+        <text x="20" y="135" class="sp-lbl" text-anchor="middle">ESQ</text>
+        <text x="240" y="135" class="sp-lbl" text-anchor="middle">DIR</text>
+        <ellipse cx="107" cy="130" rx="5" ry="10" class="sp-ear"/>
+        <ellipse cx="153" cy="130" rx="5" ry="10" class="sp-ear"/>
+        <circle cx="130" cy="130" r="23" class="sp-skull"/>
+        <path d="M123 108 L130 96 L137 108 Z" class="sp-nose"/>
+        <g class="sp-src" style="transform:translate(130px,130px)">
+          <circle r="18" class="sp-halo"/>
+          <circle r="9" class="sp-dot"/>
+        </g>
+      </svg>
+      <div class="sp-info"><p class="sp-dir">Sem som ativo</p><p class="sp-sound">—</p><p class="sp-mode">${esc(AudioEngine.modeLabel())}</p></div>
+    </div>`;
+  const vibeMarkup = () => `
+    <div class="js-vibe vibe">
+      <div class="vibe-row">
+        <div class="vibe-phone" aria-hidden="true">${icon('i-phone')}</div>
+        <div><p class="vibe-status">Em repouso</p><p class="vibe-name">Nenhum padrão executado</p></div>
+      </div>
+      <div class="vibe-bars" aria-hidden="true"></div>
+      <p class="vibe-meta">—</p>
+      <p class="vibe-api ${HapticEngine.supported ? '' : 'warn'}">${HapticEngine.supported ? 'Vibration API disponível' : 'Vibration API indisponível: simulação visual'}</p>
+    </div>`;
+
+  /* ---------- Navegação entre telas ---------- */
+  function show(name, opts = {}) {
+    current = name;
+    $$('.screen').forEach((s) => { s.hidden = s.dataset.screen !== name; });
+    const conf = SCREENS[name] || {};
+    const bar = $('#appbar');
+    bar.hidden = conf.bar === false;
+    if (!bar.hidden) {
+      $('#appbar-title').textContent = conf.title;
+      $('#appbar-step').textContent = `Preparação · ${conf.step} de 4`;
+    }
+    $('#app').classList.toggle('pocket', name === 'pocket');
+    const scr = $(`.screen[data-screen="${name}"]`);
+    if (scr) scr.scrollTop = 0;
+    if (opts.focus !== false) {
+      const h = scr && scr.querySelector('h1');
+      if (h) h.focus({ preventScroll: true });
+    }
+  }
+  function goBack() {
+    if (current === 'onboarding' && obStep > 0) { obStep--; renderOnboarding(); return; }
+    const b = (SCREENS[current] || {}).back;
+    if (b) show(b);
+  }
+
+  /* ---------- Onboarding ---------- */
+  function renderOnboarding(focus = true) {
+    const s = ONBOARDING[obStep];
+    $('#ob-count').textContent = `Etapa ${obStep + 1} de 3`;
+    $('#ob-icon').setAttribute('href', `#${s.icon}`);
+    $('#ob-title').textContent = s.title;
+    $('#ob-text').textContent = s.text;
+    $$('#ob-dots li').forEach((li, i) => {
+      li.classList.toggle('done', i < obStep);
+      if (i === obStep) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+      li.setAttribute('aria-label', `Etapa ${i + 1}${i < obStep ? ' concluída' : i === obStep ? ' atual' : ''}`);
+    });
+    $('#ob-next').innerHTML = obStep === 2 ? `Ir para o treino${icon('i-chev')}` : `Avançar${icon('i-chev')}`;
+    if (focus) $('#ob-title').focus({ preventScroll: true });
+  }
+
+  /* ---------- Treinamento ---------- */
+  function renderTraining() {
+    $('#train-grid').innerHTML = TRAINING.map((t) => {
+      const h = HAPTIC_PATTERNS[t.haptic];
+      return `<button type="button" class="btn train-btn" data-train="${t.key}" data-log="TREINO_${t.key.toUpperCase()}">
+        ${icon(t.icon)}<span class="t-label">${t.label}</span>
+        <span class="t-desc">${esc(AudioEngine.soundLabel(t.sound))} · vibração: ${esc(h.label.toLowerCase())}</span></button>`;
+    }).join('');
+    renderApiNotes();
+  }
+  function renderApiNotes() {
+    const s = AudioEngine.support;
+    const notes = [];
+    if (!s.webAudio) notes.push('Web Audio indisponível: os sons espaciais não serão reproduzidos, mas o diagrama mostra a direção.');
+    if (!s.speech) notes.push('Síntese de voz indisponível: as instruções aparecem como transcrição (fala simulada).');
+    else if (s.voiceName && !s.voicePtBR) notes.push('Voz em português do Brasil não encontrada: será usada a voz padrão com idioma pt-BR.');
+    if (!HapticEngine.supported) notes.push('Vibração indisponível neste navegador/aparelho: acompanhe os padrões no simulador visual.');
+    $('#training-api').innerHTML = notes.map((n) => `<p>${icon('i-info')} ${esc(n)}</p>`).join('');
+  }
+  async function playTraining(key) {
+    const t = TRAINING.find((x) => x.key === key);
+    if (!t) return;
+    AudioEngine.init();
+    $$('.train-btn').forEach((b) => b.classList.toggle('playing', b.dataset.train === key));
+    const h = HapticEngine.describe(t.haptic);
+    $('#train-now').textContent = `${t.label}: som “${AudioEngine.soundLabel(t.sound)}” vindo de ${DIRECTIONS[t.dir].label.toLowerCase()} + vibração “${h.label}” [${h.pattern.join(', ')}] ms.`;
+    Logger.add({ sessao: RouteSimulator.sessionType(), tipo: 'TREINAMENTO', codigo: `T-${key}`, de: StateMachine.state, para: StateMachine.state, origem: 'PARTICIPANTE', descricao: `Treino do sinal ${t.label}: som ${t.sound} (${t.dir}), vibração ${h.label} [${h.pattern.join(', ')}]` });
+    await Promise.race([AudioEngine.init(), delay(400)]);
+    HapticEngine.play(t.haptic, { source: 'treino' });
+    const ms = AudioEngine.playCue(t.sound, t.dir);
+    await delay(ms + 150);
+    AudioEngine.speak(t.speech, { priority: 1, code: 'TREINO' });
+    setTimeout(() => $$('.train-btn').forEach((b) => b.classList.remove('playing')), Math.max(ms, h.total) + 400);
+  }
+  async function playDirection(dir) {
+    AudioEngine.init();
+    await Promise.race([AudioEngine.init(), delay(400)]);
+    const sound = dir === 'tras' ? 'tras' : dir === 'direita' ? 'direita' : dir === 'esquerda' ? 'esquerda' : 'frente';
+    AudioEngine.playCue(sound, dir);
+    $('#train-now').textContent = `Direção: ${DIRECTIONS[dir].label} — som “${AudioEngine.soundLabel(sound)}”.`;
+    Logger.add({ sessao: RouteSimulator.sessionType(), tipo: 'TREINAMENTO', codigo: `DIR-${dir}`, de: StateMachine.state, para: StateMachine.state, origem: 'PARTICIPANTE', descricao: `Exploração de direção: ${DIRECTIONS[dir].label}` });
+  }
+  async function playLeftTest() {
+    AudioEngine.init();
+    await Promise.race([AudioEngine.init(), delay(400)]);
+    const ms = AudioEngine.playCue('esquerda', 'esquerda');
+    const res = $('#test-result');
+    if (!ms) {
+      res.hidden = false; res.className = 'result bad';
+      res.textContent = AudioEngine.support.webAudio ? 'O áudio ainda não foi liberado. Toque novamente no botão.' : 'Este navegador não oferece Web Audio: o teste de escuta não pode ser feito aqui.';
+    }
+    Logger.add({ sessao: RouteSimulator.sessionType(), tipo: 'TREINAMENTO', codigo: 'TESTE-ESQ', de: StateMachine.state, para: StateMachine.state, origem: 'PARTICIPANTE', descricao: 'Som de teste reproduzido à esquerda (sem fala e sem vibração)' });
+  }
+  function answerLeftTest(ok) {
+    const res = $('#test-result');
+    res.hidden = false;
+    res.className = `result ${ok ? 'ok' : 'bad'}`;
+    res.textContent = ok ? 'Ótimo! O áudio espacial está funcionando. Você pode continuar.' : 'Sem problemas. Verifique os itens abaixo, ajuste o volume e repita o teste.';
+    $('#test-help').hidden = ok;
+    Logger.add({ sessao: RouteSimulator.sessionType(), tipo: 'AÇÃO_PARTICIPANTE', codigo: 'TESTE-ESQ', de: StateMachine.state, para: StateMachine.state, origem: 'PARTICIPANTE', acao: ok ? 'OUVIU_ESQUERDA' : 'NAO_OUVIU_ESQUERDA', descricao: `Resposta ao teste de escuta à esquerda: ${ok ? 'Sim, consegui' : 'Não consegui'}` });
+  }
+
+  /* ---------- Destino e reconhecimento de voz ---------- */
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recog = null, listening = false, simTimer = null;
+  function renderRoutes() {
+    $('#route-list').innerHTML = ROUTES.map((r) => `<li>
+      <button type="button" class="route-card" data-route="${r.id}" data-log="ROTA_SALVA_${r.id.toUpperCase()}">
+        <span class="r-name">${icon('i-pin')}${esc(r.name)}</span>
+        <span class="r-meta">${fmtDist(r.distance)} · ≈ ${Math.max(1, Math.round(r.distance / RouteSimulator.WALK_SPEED / 60))} min · ${r.crossings} travessia${r.crossings > 1 ? 's' : ''}</span>
+        <span class="r-badges"><span class="badge badge-ok">${icon('i-saved')}Disponível offline</span><span class="badge badge-demo">Dados de demonstração</span></span>
+      </button></li>`).join('');
+    if (!Recognition) $('#mic-status').textContent = 'Reconhecimento de voz indisponível neste navegador: o microfone usa um ditado simulado. Você também pode digitar.';
+  }
+  function setMicState(on) {
+    listening = on;
+    const b = $('#mic-btn');
+    b.setAttribute('aria-pressed', String(on));
+    b.setAttribute('aria-label', on ? 'Parar ditado' : 'Ditar destino por voz');
+  }
+  function simulateDictation(reason) {
+    const input = $('#dest-input');
+    const phrase = 'Biblioteca Aurora';
+    setMicState(true);
+    $('#mic-status').textContent = `${reason} Ditado simulado: ouvindo…`;
+    clearInterval(simTimer);
+    let i = 0;
+    setTimeout(() => {
+      simTimer = setInterval(() => {
+        i++; input.value = phrase.slice(0, i);
+        if (i >= phrase.length) {
+          clearInterval(simTimer); setMicState(false);
+          $('#mic-status').textContent = `Reconhecido (simulado): “${phrase}”. Confira e toque em Continuar.`;
+          Logger.add({ sessao: 'PREPARAÇÃO', tipo: 'AÇÃO_PARTICIPANTE', codigo: 'VOZ-SIM', origem: 'PARTICIPANTE', descricao: `Ditado simulado: ${phrase}` });
+        }
+      }, 55);
+    }, 900);
+  }
+  function toggleMic() {
+    $('#dest-error').hidden = true;
+    if (listening) {
+      if (recog) { try { recog.stop(); } catch (e) { /* ok */ } }
+      clearInterval(simTimer); setMicState(false);
+      $('#mic-status').textContent = 'Ditado interrompido.';
+      return;
+    }
+    if (!Recognition) { simulateDictation('Reconhecimento de voz indisponível.'); return; }
+    try {
+      recog = new Recognition();
+      recog.lang = 'pt-BR'; recog.interimResults = true; recog.maxAlternatives = 1;
+      recog.onresult = (e) => {
+        let text = '';
+        for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+        $('#dest-input').value = text.trim();
+        if (e.results[e.results.length - 1].isFinal) {
+          $('#mic-status').textContent = `Reconhecido: “${text.trim()}”. Confira e toque em Continuar.`;
+          Logger.add({ sessao: 'PREPARAÇÃO', tipo: 'AÇÃO_PARTICIPANTE', codigo: 'VOZ', origem: 'PARTICIPANTE', descricao: `Destino ditado: ${text.trim()}` });
+        }
+      };
+      recog.onerror = (e) => {
+        setMicState(false);
+        const msgs = { 'not-allowed': 'Permissão do microfone negada (comum ao abrir o arquivo localmente).', 'no-speech': 'Nenhuma fala detectada.', network: 'O reconhecimento precisa de internet.', 'audio-capture': 'Microfone não encontrado.' };
+        $('#mic-status').innerHTML = `${esc(msgs[e.error] || `Erro no reconhecimento (${e.error}).`)} Digite o destino ou <button type="button" class="link-btn" id="sim-dict" data-log="DITADO_SIMULADO">use o ditado simulado</button>.`;
+      };
+      recog.onend = () => { if (listening) { setMicState(false); if (!$('#dest-input').value) $('#mic-status').textContent = 'Ditado encerrado. Você pode digitar o destino.'; } };
+      setMicState(true);
+      $('#mic-status').textContent = 'Ouvindo… diga o nome do destino.';
+      recog.start();
+    } catch (err) {
+      setMicState(false);
+      simulateDictation('Não foi possível iniciar o reconhecimento de voz.');
+    }
+  }
+  function submitDestination(e) {
+    e.preventDefault();
+    const input = $('#dest-input');
+    const val = input.value.trim();
+    if (!val) {
+      // IHC — Prevenção de erros: mensagem clara, foco no campo, sem perder o contexto.
+      $('#dest-error').hidden = false; input.setAttribute('aria-invalid', 'true'); input.focus();
+      return;
+    }
+    input.removeAttribute('aria-invalid'); $('#dest-error').hidden = true;
+    const match = ROUTES.find((r) => r.name.toLowerCase() === val.toLowerCase());
+    const route = match || { id: 'digitado', name: val, distance: 620, crossings: 2, saved: false, alerts: ['Travessia sem semáforo (simulada)', 'Trecho com alerta de segurança (simulado)'] };
+    chooseRoute(route, match ? 'rota salva (digitada)' : 'destino digitado');
+  }
+  function chooseRoute(route, how) {
+    RouteSimulator.setRoute(route);
+    Logger.add({ sessao: 'PREPARAÇÃO', tipo: 'AÇÃO_PARTICIPANTE', codigo: 'DESTINO', origem: 'PARTICIPANTE', descricao: `Destino escolhido (${how}): ${route.name}${route.saved ? ' · rota salva — modo offline de demonstração ativado' : ''}` });
+    renderSummary(route);
+    show('summary');
+  }
+
+  /* ---------- Resumo ---------- */
+  function renderSummary(route) {
+    $('#sum-dest').textContent = route.name;
+    $('#sum-badges').innerHTML = (route.saved
+      ? `<span class="badge badge-ok">${icon('i-saved')}Disponível offline</span><span class="badge badge-info">${icon('i-offline')}Modo offline de demonstração</span>`
+      : `<span class="badge badge-info">${icon('i-wifi')}Rota online (simulada)</span>`) + '<span class="badge badge-demo">Dados de demonstração</span>';
+    $('#sum-distance').textContent = fmtDist(route.distance);
+    $('#sum-time').textContent = `≈ ${Math.max(1, Math.round(route.distance / RouteSimulator.WALK_SPEED / 60))} min`;
+    $('#sum-crossings').textContent = route.crossings;
+    $('#sum-alerts').textContent = route.alerts.length;
+    $('#sum-alert-list').innerHTML = route.alerts.map((a) => `<li>${icon('i-alert')}<span>${esc(a)}</span></li>`).join('');
+    updateModeHint();
+  }
+  function updateModeHint() {
+    $('#sum-mode').textContent = Settings.get('mode') === 'auto'
+      ? 'Modo de execução: automático (alterável no painel do avaliador).'
+      : 'Modo de execução: manual — o avaliador dispara os eventos.';
+  }
+  async function confirmStart() {
+    const route = RouteSimulator.route;
+    const ok = await ConfirmDialog.open({
+      title: 'Iniciar a navegação?',
+      body: `<p>Destino: <strong>${esc(route ? route.name : '—')}</strong>.</p>
+             <p>Depois de confirmar, guarde o celular no bolso. A partir daí, você será guiado(a) apenas por sons, voz e vibrações.</p>
+             <p class="note">Rota e alertas simulados. Use somente em ambiente controlado, com supervisão.</p>`,
+      confirmLabel: 'Iniciar navegação',
+      // Gesto explícito: libera AudioContext e síntese de voz dentro do clique.
+      onConfirmSync: () => { AudioEngine.prime(); },
+    });
+    if (!ok) { Logger.add({ sessao: 'PREPARAÇÃO', tipo: 'AÇÃO_PARTICIPANTE', codigo: 'INICIO_CANCELADO', origem: 'PARTICIPANTE', descricao: 'Início da navegação cancelado na confirmação' }); return; }
+    Logger.add({ sessao: 'PREPARAÇÃO', tipo: 'SISTEMA', codigo: 'PREPARO', origem: 'SISTEMA', descricao: `Mecanismos preparados — Web Audio: ${AudioEngine.support.webAudio ? 'sim' : 'não'} · fala: ${AudioEngine.support.speech ? 'sim' : 'não'} · vibração: ${HapticEngine.supported ? 'sim' : 'simulada'}` });
+    if (Settings.get('mode') === 'auto') RouteSimulator.startAuto();
+    else { RouteSimulator.beginManual(); toast('Modo manual: dispare os eventos no painel do avaliador (engrenagem).', 'info'); }
+  }
+
+  /* ---------- Chegada ---------- */
+  function renderArrival(s) {
+    $('#arr-title').textContent = s.arrived ? 'Você chegou!' : 'Rota encerrada';
+    $('#arr-dest').textContent = s.route ? `${s.arrived ? 'Destino' : 'Destino planejado'}: ${s.route.name}` : '';
+    $('#arr-icon').classList.toggle('ended', !s.arrived);
+    $('#arr-icon-use').setAttribute('href', s.arrived ? '#i-flag' : '#i-stop');
+    const items = [
+      ['i-route', 'Distância percorrida', fmtDist(s.distanceDone)],
+      ['i-clock', 'Tempo simulado', fmtClock(s.simSeconds)],
+      ['i-alert', 'Alertas apresentados', s.stats.alerts],
+      ['i-arrow-left', 'Saídas da rota', s.stats.deviations],
+      ['i-check-circle', 'Confirmações', s.stats.confirmations],
+      ['i-repeat', 'Repetições pedidas', s.stats.repeats],
+      ['i-pause', 'Pausas', s.stats.pauses],
+      ['i-clock', 'Duração real', fmtClock(s.realSeconds)],
+    ];
+    $('#arr-stats').innerHTML = items.map(([ic, k, v]) => `<div><dt>${icon(ic)}${k}</dt><dd>${v}</dd></div>`).join('');
+  }
+
+  /* ---------- Painel sensorial: atualizações via Bus ---------- */
+  function renderState(state) {
+    const m = STATE_META[state];
+    $$('.js-state').forEach((el) => {
+      el.dataset.state = state;
+      el.innerHTML = `${icon(m.icon)}<span>${m.label}</span>`;
+      el.setAttribute('aria-label', `Estado: ${m.label}`);
+    });
+    document.body.dataset.navState = state;
+  }
+  const SPEECH_STATUS = { falando: 'Reproduzindo', 'concluída': 'Concluída', interrompida: 'Interrompida por instrução prioritária ou pausa', simulada: 'Fala simulada (síntese de voz indisponível ou bloqueada)', erro: 'Erro na síntese de voz', cancelada: 'Cancelada' };
+  function onSpeech(s) {
+    const box = $('#speech-box');
+    if (s.status === 'falando') {
+      const cap = $('#caption');
+      cap.textContent = (s.repeat ? '(Repetição) ' : '') + s.text;
+      box.classList.add('is-speaking');
+    } else {
+      box.classList.remove('is-speaking');
+    }
+    $('#speech-status').textContent = `${SPEECH_STATUS[s.status] || s.status}${s.code && s.code !== 'SYS' ? ` · ${s.code}` : ''}`;
+    renderSpeechMeta();
+  }
+  function renderSpeechMeta() {
+    const s = AudioEngine.support;
+    $('#speech-meta').textContent = !s.speech
+      ? 'SpeechSynthesis indisponível: transcrição exibida, duração simulada.'
+      : `Voz: ${s.voiceName || 'padrão do sistema (pt-BR)'} · velocidade ${fmtDec(Settings.get('speechRate'))}×`;
+  }
+  function onSpatial(s) {
+    $$('.js-spatial').forEach((w) => {
+      const r = 88;
+      const rad = (s.az * Math.PI) / 180;
+      const x = 130 + r * Math.sin(rad), y = 130 - r * Math.cos(rad);
+      w.querySelector('.sp-src').style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+      w.classList.remove('idle', 'is-playing', 'is-beep', 'tone-danger', 'silent');
+      void w.offsetWidth; // reinicia a animação
+      w.classList.add(s.periodic ? 'is-beep' : 'is-playing');
+      if (s.tone === 'danger') w.classList.add('tone-danger');
+      if (s.silent) w.classList.add('silent');
+      clearTimeout(w._t);
+      w._t = setTimeout(() => w.classList.remove('is-playing', 'is-beep'), Math.max(500, s.durationMs || 500));
+      const deg = s.az === 180 ? '180°' : `${s.az > 0 ? '+' : ''}${s.az}°`;
+      w.querySelector('.sp-dir').textContent = `${s.label} · ${deg}`;
+      w.querySelector('.sp-sound').textContent = s.periodic ? 'Bipe periódico (seguindo corretamente)' : s.soundLabel;
+      w.querySelector('.sp-mode').textContent = s.silent ? `Sem áudio: ${s.reason}` : s.mode;
+    });
+  }
+  function onHapticStart(h) {
+    $$('.js-vibe').forEach((w) => {
+      const pulses = h.pattern.filter((_, i) => i % 2 === 0).length;
+      w._pulses = pulses;
+      w.querySelector('.vibe-bars').innerHTML = h.pattern.map((ms, i) => `<span class="seg ${i % 2 ? 'pause' : 'pulse'}" style="flex-grow:${ms}"><i></i><b>${i % 2 ? '' : ms}</b></span>`).join('');
+      w.querySelector('.vibe-name').textContent = `${h.label} · ${pulses} pulso${pulses > 1 ? 's' : ''}`;
+      w.querySelector('.vibe-meta').textContent = `[${h.pattern.join(', ')}] ms · total ${h.total} ms`;
+      const api = w.querySelector('.vibe-api');
+      api.textContent = !h.supported ? 'Vibration API indisponível: somente simulação visual' : (h.apiResult ? 'navigator.vibrate(): padrão enviado ao aparelho' : 'navigator.vibrate() recusado pelo navegador: somente simulação visual');
+      api.classList.toggle('warn', !h.supported || !h.apiResult);
+    });
+  }
+  function onHapticSeg(seg) {
+    $$('.js-vibe').forEach((w) => {
+      $$('.seg', w).forEach((el, i) => { el.classList.toggle('active', i === seg.index); el.classList.toggle('done', i < seg.index); });
+      w.classList.toggle('buzzing', seg.on);
+      w.querySelector('.vibe-status').textContent = seg.on ? `Vibrando · pulso ${Math.floor(seg.index / 2) + 1} de ${w._pulses || 1} (${seg.ms} ms)` : `Pausa (${seg.ms} ms)`;
+    });
+  }
+  function onHapticEnd(h) {
+    $$('.js-vibe').forEach((w) => {
+      w.classList.remove('buzzing');
+      $$('.seg', w).forEach((el) => { el.classList.remove('active'); if (h.completed) el.classList.add('done'); });
+      w.querySelector('.vibe-status').textContent = h.completed ? 'Concluído' : 'Cancelado';
+    });
+  }
+  function onConditions(c) {
+    const chips = [
+      c.gps === 'fraco' ? `<span class="chip warn">${icon('i-gps')}GPS fraco</span>` : `<span class="chip ok">${icon('i-gps')}GPS bom (simulado)</span>`,
+      c.offline ? `<span class="chip warn">${icon('i-offline')}Offline · rota salva</span>` : `<span class="chip ok">${icon('i-wifi')}Online (simulado)</span>`,
+      c.headphones ? `<span class="chip ok">${icon('i-headphones')}Fone conectado</span>` : `<span class="chip bad">${icon('i-headphones-off')}Fone desconectado</span>`,
+    ];
+    $('#conditions').innerHTML = chips.join('');
+    $('#sb-net').textContent = c.offline ? 'Offline' : '5G';
+    const paused = StateMachine.state === 'PAUSADO';
+    const banner = $('#pause-banner');
+    banner.hidden = !paused;
+    if (paused) {
+      const reason = RouteSimulator.PAUSE_REASONS[c.pausedReason] || 'pausa';
+      $('#pause-reason').textContent = `Navegação pausada: ${reason}`;
+      $('#pause-resume-label').textContent = c.pausedReason === 'fone' ? 'Reconectar fone e retomar' : 'Retomar navegação';
+      banner.setAttribute('role', c.pausedReason === 'fone' ? 'alert' : 'status');
+    }
+  }
+  function onProgress(p) {
+    const pct = Math.round(p.progress * 100);
+    $$('.js-progress-bar').forEach((b) => { b.style.width = `${pct}%`; });
+    const bar = $('#route-pbar'); bar.setAttribute('aria-valuenow', String(pct)); bar.setAttribute('aria-valuetext', `${pct}% da rota`);
+    $('#pg-total').textContent = p.total ? fmtDist(p.total) : '—';
+    $('#pg-remaining').textContent = p.total ? fmtDist(p.remaining) : '—';
+    $('#pg-done').textContent = p.total ? `${fmtDist(p.done)} (${pct}%)` : '—';
+    $('#pg-time').textContent = fmtClock(p.simSeconds);
+    $('#pg-step').textContent = p.step ? `${p.step.title} · etapa ${Math.max(1, p.stepNumber)} de ${p.steps}` : (p.active ? 'Rota iniciada, aguardando B1' : 'Aguardando início');
+  }
+  function onDecision(d) {
+    const box = $('#decision-box');
+    box.classList.toggle('pending', !!d);
+    box.textContent = d ? 'Decisão pendente: rota alternativa. Volume + aceita · Volume − repete a instrução.' : 'Nenhuma decisão pendente.';
+    $$('.vol-btn[data-vol="up"]').forEach((b) => b.classList.toggle('attention', !!d));
+  }
+
+  /* ---------- Posicionamento do painel sensorial (desktop ao lado / celular no modo bolso) ---------- */
+  const mqWide = window.matchMedia('(min-width: 1100px)');
+  function placePanel() {
+    const panel = $('#sensory');
+    const target = mqWide.matches ? $('#aside-slot') : $('#mobile-slot');
+    if (panel.parentElement !== target) target.appendChild(panel);
+    applyCollapse();
+  }
+  function applyCollapse() {
+    const expanded = $('#toggle-panel').getAttribute('aria-expanded') === 'true';
+    $$('#sensory .s-collapsible').forEach((s) => { s.hidden = !mqWide.matches && !expanded; });
+  }
+
+  /* ---------- Ligações ---------- */
+  function bind() {
+    $$('[data-widget="spatial"]').forEach((el) => { el.innerHTML = spatialMarkup(); });
+    $$('[data-widget="vibe"]').forEach((el) => { el.innerHTML = vibeMarkup(); });
+    renderTraining(); renderRoutes(); renderOnboarding(false); renderState(StateMachine.state); renderSpeechMeta();
+
+    $('#back-btn').addEventListener('click', goBack);
+    $('#btn-start').addEventListener('click', () => { AudioEngine.init(); obStep = 0; renderOnboarding(false); show('onboarding'); });
+    $('#ob-prev').addEventListener('click', () => { if (obStep === 0) show('welcome'); else { obStep--; renderOnboarding(); } });
+    $('#ob-next').addEventListener('click', () => { if (obStep < 2) { obStep++; renderOnboarding(); } else show('training'); });
+    $('#train-grid').addEventListener('click', (e) => { const b = e.target.closest('[data-train]'); if (b) playTraining(b.dataset.train); });
+    $$('[data-dir]').forEach((b) => b.addEventListener('click', () => playDirection(b.dataset.dir)));
+    $('#test-play').addEventListener('click', playLeftTest);
+    $('#test-repeat').addEventListener('click', () => { $('#test-result').hidden = true; playLeftTest(); });
+    $('#test-yes').addEventListener('click', () => answerLeftTest(true));
+    $('#test-no').addEventListener('click', () => answerLeftTest(false));
+    $('#test-volume').addEventListener('input', (e) => Settings.set('masterVolume', Number(e.target.value)));
+    $('#to-destination').addEventListener('click', () => show('destination'));
+    $('#dest-form').addEventListener('submit', submitDestination);
+    $('#dest-input').addEventListener('input', () => { $('#dest-error').hidden = true; $('#dest-input').removeAttribute('aria-invalid'); });
+    $('#mic-btn').addEventListener('click', toggleMic);
+    $('#mic-status').addEventListener('click', (e) => { if (e.target.id === 'sim-dict') simulateDictation(''); });
+    $('#route-list').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-route]');
+      if (b) chooseRoute(ROUTES.find((r) => r.id === b.dataset.route), 'rota salva');
+    });
+    $('#change-dest').addEventListener('click', () => show('destination'));
+    $('#start-nav').addEventListener('click', confirmStart);
+    $('#end-route').addEventListener('click', async () => {
+      const ok = await ConfirmDialog.open({ title: 'Encerrar a rota?', body: '<p>A navegação será interrompida e um resumo do trajeto será exibido.</p>', confirmLabel: 'Encerrar rota', danger: true });
+      if (ok) RouteSimulator.end('PARTICIPANTE');
+    });
+    $('#new-route').addEventListener('click', () => { RouteSimulator.newRoute(); show('destination'); });
+    $('#open-logs').addEventListener('click', () => EvaluatorPanel.open('logs'));
+    $('#toggle-panel').addEventListener('click', (e) => {
+      const btn = e.currentTarget;
+      btn.setAttribute('aria-expanded', String(btn.getAttribute('aria-expanded') !== 'true'));
+      applyCollapse();
+    });
+    if (mqWide.addEventListener) mqWide.addEventListener('change', placePanel); else mqWide.addListener(placePanel);
+    placePanel();
+
+    // Botões de volume (tela, laterais e painéis) — todos levam ao mesmo comportamento.
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-vol]');
+      if (!b) return;
+      b.classList.add('pressed'); setTimeout(() => b.classList.remove('pressed'), 220);
+      const src = b.dataset.src || 'botão';
+      if (b.dataset.vol === 'up') RouteSimulator.volumeUp(src); else RouteSimulator.volumeDown(src);
+    });
+    // Ações compartilhadas (pausar/retomar/pular) em qualquer painel.
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-action]');
+      if (!b) return;
+      const a = b.dataset.action;
+      if (a === 'pause') RouteSimulator.pause('AVALIADOR');
+      if (a === 'resume') RouteSimulator.resume('AVALIADOR');
+      if (a === 'skip') RouteSimulator.skip();
+    });
+
+    Bus.on('state', ({ to }) => renderState(to));
+    Bus.on('speech', onSpeech);
+    Bus.on('speech-note', (n) => { $('#speech-status').textContent = `${n.code}: ${n.note}`; });
+    Bus.on('speech-error', (e) => toast(`Síntese de voz falhou (${e.error}). Exibindo a transcrição com duração simulada.`, 'warn'));
+    Bus.on('spatial', onSpatial);
+    Bus.on('haptic-start', onHapticStart);
+    Bus.on('haptic-seg', onHapticSeg);
+    Bus.on('haptic-end', onHapticEnd);
+    Bus.on('conditions', onConditions);
+    Bus.on('state', () => onConditions(lastConditions));
+    Bus.on('conditions', (c) => { lastConditions = c; });
+    Bus.on('progress', onProgress);
+    Bus.on('decision', onDecision);
+    Bus.on('audio-support', () => { renderSpeechMeta(); renderApiNotes(); });
+    Bus.on('settings', ({ key, value }) => {
+      if (key === 'speechRate') renderSpeechMeta();
+      if (key === 'mode') updateModeHint();
+      if (key === 'ariaLive') $('#caption').setAttribute('aria-live', value ? 'assertive' : 'off');
+      if (key === 'masterVolume') { $('#test-volume').value = value; $('#test-volume-out').textContent = `${Math.round(value * 100)}%`; }
+    });
+    Bus.on('navigation-start', () => {
+      Platform.keepAwake();
+      $('#caption').textContent = 'Aguardando a primeira instrução.';
+      if (current !== 'pocket') show('pocket');
+    });
+    Bus.on('route-ended', (s) => {
+      Platform.release();
+      setTimeout(() => { renderArrival(s); show('arrival'); }, s.arrived ? 700 : 0);
+    });
+    Bus.on('toast', ({ msg, tone }) => {
+      const region = $('#toasts');
+      const t = document.createElement('div');
+      t.className = `toast ${tone || ''}`;
+      t.textContent = msg;
+      region.appendChild(t);
+      while (region.children.length > 3) region.firstElementChild.remove();
+      setTimeout(() => t.remove(), 4500);
+    });
+
+    // Relógio da barra de status (decorativa, aria-hidden).
+    const tick = () => { const d = new Date(); $('#sb-clock').textContent = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+    tick(); setInterval(tick, 20000);
+  }
+  let lastConditions = { offline: false, gps: 'bom', headphones: true, pausedReason: null };
+
+  return { bind, show, current: () => current };
+})();
+
+/* =====================================================================================
+   11. EVALUATOR PANEL — Wizard of Oz
+   ===================================================================================== */
+const EvaluatorPanel = (() => {
+  const drawer = $('#drawer');
+  const gear = $('#gear');
+  const EVENT_BUTTONS = [
+    ['B1', 'Início'], ['B2', 'Seguindo'], ['B3', 'Direita'], ['B4', 'Esquerda'], ['B5', 'Saiu da rota'],
+    ['B6', 'Perigo (completo)'], ['B6T', 'Perigo · travessia'], ['B6R', 'Perigo · rota alternativa'],
+    ['B7', 'Confirmação'], ['B8', 'Chegando'], ['B9', 'Chegou'],
+  ];
+  const EXC_BUTTONS = [['C1', 'GPS fraco'], ['C2', 'Offline'], ['C3', 'Fone desconectado']];
+  const FILTERS = {
+    all: null,
+    events: ['EVENTO', 'EXCEÇÃO', 'TRANSIÇÃO', 'EVENTO_IGNORADO'],
+    participant: ['AÇÃO_PARTICIPANTE', 'DECISÃO', 'REPETIÇÃO', 'TREINAMENTO'],
+    buttons: ['BOTÃO'],
+    system: ['SISTEMA', 'DEMONSTRAÇÃO', 'TIMELINE', 'PAUSA', 'RETOMADA', 'AÇÃO_AVALIADOR', 'CONFIGURAÇÃO'],
+  };
+  let returnFocus = null;
+
+  /* ---------- Abrir / fechar (não-modal: sem armadilha de foco; Esc fecha; foco restaurado) ---------- */
+  function open(tab) {
+    if (tab) selectTab(tab);
+    if (!drawer.hidden) return;
+    returnFocus = document.activeElement;
+    drawer.hidden = false;
+    void drawer.offsetWidth;
+    drawer.classList.add('open');
+    gear.setAttribute('aria-expanded', 'true');
+    gear.setAttribute('aria-label', 'Fechar painel do avaliador');
+    $('#drawer-title').focus();
+  }
+  function close() {
+    if (drawer.hidden) return;
+    drawer.classList.remove('open');
+    gear.setAttribute('aria-expanded', 'false');
+    gear.setAttribute('aria-label', 'Abrir painel do avaliador');
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    setTimeout(() => { if (!drawer.classList.contains('open')) drawer.hidden = true; }, reduce ? 0 : 260);
+    const target = returnFocus && document.contains(returnFocus) && returnFocus !== document.body && !drawer.contains(returnFocus) ? returnFocus : gear;
+    target.focus();
+  }
+
+  /* ---------- Abas (setas esquerda/direita, Home/End) ---------- */
+  const tabs = () => $$('[role="tab"]', drawer);
+  function selectTab(name, focus = false) {
+    tabs().forEach((t) => {
+      const on = t.id === `tab-${name}`;
+      t.setAttribute('aria-selected', String(on));
+      t.tabIndex = on ? 0 : -1;
+      $(`#${t.getAttribute('aria-controls')}`).hidden = !on;
+      if (on && focus) t.focus();
+    });
+    if (name === 'logs') scrollLogs(true);
+  }
+
+  /* ---------- Botões de eventos ---------- */
+  function renderEventButtons() {
+    const mk = ([code, label], exc) => `<button type="button" class="btn ev-btn ${exc ? 'exc' : ''}" data-event="${code}" aria-label="${code.slice(0, 2)} — ${label}"><span class="code">${code.slice(0, 2)}</span>${label}</button>`;
+    $('#ev-route').innerHTML = EVENT_BUTTONS.map((b) => mk(b, false)).join('');
+    $('#ev-exc').innerHTML = EXC_BUTTONS.map((b) => mk(b, true)).join('') +
+      `<button type="button" class="btn ev-btn" data-action="resume" data-log="RECONECTAR_RETOMAR"><span class="code">↺</span>Reconectar / retomar</button>`;
+  }
+
+  /* ---------- Demonstração ---------- */
+  function renderDemoSteps(steps = []) {
+    const icons = { 'concluído': 'i-check', executando: 'i-play', aguardando: 'i-pause', ignorado: 'i-skip', pendente: 'i-chev' };
+    const labels = { 'concluído': 'concluído', executando: 'em execução', aguardando: 'aguardando decisão', ignorado: 'ignorado', pendente: 'pendente' };
+    $('#demo-steps').innerHTML = RouteSimulator.SEQUENCE.map((c, i) => {
+      const st = steps[i] || 'pendente';
+      return `<li class="st-${st}">${icon(icons[st] || 'i-chev')}<span>${esc(RouteSimulator.SEQ_TITLES[c])}</span><span class="sr-only"> (${labels[st]})</span></li>`;
+    }).join('');
+  }
+  function onRunner(r) {
+    const n = r.total;
+    const doneCount = r.steps.filter((s) => s === 'concluído' || s === 'ignorado').length;
+    const isDemo = r.sessionType === 'DEMONSTRAÇÃO_RÁPIDA';
+    const curIdx = Math.min(r.index, n - 1);
+    const STATUS = {
+      executando: 'Executando evento', intervalo: `Intervalo · próximo em ${Math.ceil((r.remainingMs || 0) / 1000)} s`,
+      'aguardando-decisao': 'Aguardando Volume + do participante', 'aguardando-fala': 'Aguardando o fim da fala prioritária',
+      pausada: 'Pausada',
+    };
+    const statusText = STATUS[r.status] || (r.status ? r.status.charAt(0).toUpperCase() + r.status.slice(1) : 'Parada');
+    if (r.running || r.sessionType) {
+      $('#demo-current').textContent = r.running ? `${isDemo ? '' : 'Timeline automática · '}${RouteSimulator.SEQ_TITLES[r.current || RouteSimulator.SEQUENCE[curIdx]]}` : `${isDemo ? 'Demonstração' : 'Timeline'} ${statusText.toLowerCase()}`;
+    }
+    $('#demo-count').textContent = `${r.running ? Math.min(n, r.index + 1) : doneCount} de ${n} eventos`;
+    $('#demo-pbar-fill').style.width = `${(doneCount / n) * 100}%`;
+    $('#demo-pbar').setAttribute('aria-valuenow', String(doneCount));
+    const next = r.running ? RouteSimulator.SEQUENCE[r.status === 'intervalo' || r.status === 'aguardando-fala' ? r.index : r.index + 1] : null;
+    $('#demo-next').textContent = next ? RouteSimulator.SEQ_TITLES[next] : '—';
+    $('#demo-status').textContent = statusText;
+    $('#demo-waiting').hidden = !(r.running && r.status === 'aguardando-decisao');
+    renderDemoSteps(r.steps);
+    $('#drawer-runner').textContent = r.running ? `${isDemo ? 'Demonstração' : 'Timeline'}: ${statusText.toLowerCase()}` : 'Timeline parada';
+    syncButtons();
+  }
+  function syncButtons() {
+    const st = StateMachine.state;
+    const active = RouteSimulator.isActive();
+    $$('[data-action="pause"]', drawer).forEach((b) => { b.disabled = !active || ['PAUSADO', 'PARADO', 'CHEGOU'].includes(st); });
+    $$('[data-action="resume"]', drawer).forEach((b) => { b.disabled = st !== 'PAUSADO'; });
+    $$('[data-action="skip"]', drawer).forEach((b) => { b.disabled = !RouteSimulator.isRunning(); });
+    $('#demo-end').disabled = !active && !RouteSimulator.isRunning();
+    $('#end-nav').disabled = !active;
+    $('#run-auto').disabled = RouteSimulator.isRunning() || st === 'CHEGOU' || Settings.get('mode') !== 'auto';
+    $('#demo-state').textContent = STATE_META[st].label;
+  }
+
+  /* ---------- Ajustes ---------- */
+  const OUT = {
+    speechRate: (v) => `${fmtDec(v)}×`, masterVolume: (v) => `${Math.round(v * 100)}%`, beepVolume: (v) => `${Math.round(v * 100)}%`,
+    beepInterval: (v) => `${fmtDec(v)} s`, autoInterval: (v) => `${v} s`, demoInterval: (v) => `${v} s`,
+  };
+  function bindSettings() {
+    $$('[data-setting]', drawer).forEach((el) => {
+      const key = el.dataset.setting;
+      const read = () => (el.type === 'checkbox' ? el.checked : (el.type === 'range' ? Number(el.value) : el.value));
+      const v0 = Settings.get(key);
+      if (el.type === 'checkbox') el.checked = v0; else el.value = v0;
+      const out = $(`#out-${key}`);
+      if (out && OUT[key]) out.textContent = OUT[key](v0);
+      el.addEventListener('input', () => { Settings.set(key, read()); });
+      el.addEventListener('change', () => {
+        Settings.set(key, read());
+        Logger.add({ sessao: RouteSimulator.sessionType(), tipo: 'CONFIGURAÇÃO', codigo: key, de: StateMachine.state, para: StateMachine.state, origem: 'AVALIADOR', descricao: `Ajuste alterado: ${key} = ${read()}` });
+      });
+    });
+    Bus.on('settings', ({ key, value }) => {
+      const out = $(`#out-${key}`);
+      if (out && OUT[key]) out.textContent = OUT[key](value);
+      const el = $(`[data-setting="${key}"]`, drawer);
+      if (el && el.type === 'range' && Number(el.value) !== value) el.value = value;
+    });
+    // Padrão de alerta configurável — editado aqui, armazenado SOMENTE em HAPTIC_PATTERNS.
+    const alertInput = $('#set-alertPattern');
+    alertInput.value = HAPTIC_PATTERNS.alerta.pattern.join(', ');
+    $('#apply-alert').addEventListener('click', () => {
+      const arr = alertInput.value.split(/[,;\s]+/).filter(Boolean).map(Number);
+      if (HapticEngine.setPattern('alerta', arr)) {
+        alertInput.removeAttribute('aria-invalid');
+        Logger.add({ sessao: RouteSimulator.sessionType(), tipo: 'CONFIGURAÇÃO', codigo: 'alerta', origem: 'AVALIADOR', descricao: `Padrão de alerta alterado para [${arr.join(', ')}]` });
+        HapticEngine.play('alerta', { source: 'ajustes' });
+        toast(`Padrão de alerta aplicado: [${arr.join(', ')}] ms.`, 'ok');
+      } else {
+        alertInput.setAttribute('aria-invalid', 'true');
+        toast('Padrão inválido. Use de 1 a 15 números entre 0 e 5000, separados por vírgula.', 'warn');
+      }
+    });
+    $('#test-voice').addEventListener('click', () => { AudioEngine.init(); AudioEngine.speak('Teste de voz do SoundPath. Navegação que você escuta, não olha.', { priority: 1, code: 'TESTE' }); });
+    $('#test-dirs').addEventListener('click', async () => {
+      AudioEngine.init();
+      await Promise.race([AudioEngine.init(), delay(400)]);
+      const seq = [['frente', 'frente'], ['direita', 'direita'], ['tras', 'tras'], ['esquerda', 'esquerda']];
+      for (const [s, d] of seq) { AudioEngine.playCue(s, d); await delay(900); }
+    });
+    $$('input[name="run-mode"]').forEach((r) => r.addEventListener('change', () => {
+      if (!r.checked) return;
+      Settings.set('mode', r.value);
+      $('#mode-help').textContent = r.value === 'auto' ? 'Automático: executa a timeline B1–B9 e para nas decisões pendentes.' : 'Manual: nenhum evento é disparado sozinho; escolha cada evento abaixo (é possível repeti-los).';
+      Logger.add({ sessao: RouteSimulator.sessionType(), tipo: 'CONFIGURAÇÃO', codigo: 'modo', de: StateMachine.state, para: StateMachine.state, origem: 'AVALIADOR', descricao: `Modo de execução: ${r.value === 'auto' ? 'automático' : 'manual'}` });
+      syncButtons();
+    }));
+  }
+  function renderDiag() {
+    const s = AudioEngine.support;
+    const items = [
+      [s.webAudio, `Web Audio API ${s.webAudio ? `(contexto: ${s.ctxState})` : 'indisponível'}`],
+      [s.hrtf || s.stereo, `Espacialização: ${s.hrtf ? 'PannerNode HRTF' : ''}${s.hrtf && s.stereo ? ' + ' : ''}${s.stereo ? 'StereoPannerNode' : ''}${!s.hrtf && !s.stereo ? (s.webAudio ? 'disponível após o primeiro gesto' : 'indisponível') : ''}`],
+      [s.speech, `SpeechSynthesis ${s.speech ? 'disponível' : 'indisponível (fala simulada)'}`],
+      [s.voicePtBR, s.voiceName ? `Voz: ${s.voiceName}${s.voicePtBR ? '' : ' (não é pt-BR)'}` : 'Voz pt-BR não encontrada (usa a voz padrão com lang="pt-BR")'],
+      [HapticEngine.supported, `Vibration API ${HapticEngine.supported ? 'disponível (hardware não garantido em desktop)' : 'indisponível — simulador visual'}`],
+      [!!(window.SpeechRecognition || window.webkitSpeechRecognition), `SpeechRecognition ${(window.SpeechRecognition || window.webkitSpeechRecognition) ? 'disponível' : 'indisponível — ditado simulado'}`],
+      ['wakeLock' in navigator, `Screen Wake Lock ${'wakeLock' in navigator ? 'disponível' : 'indisponível'}`],
+    ];
+    $('#diag').innerHTML = items.map(([ok, t]) => `<li><span class="${ok ? 'yes' : 'no'}">${icon(ok ? 'i-check' : 'i-alert')}</span><span><span class="sr-only">${ok ? 'Sim: ' : 'Atenção: '}</span>${esc(t)}</span></li>`).join('');
+  }
+
+  /* ---------- Registros ---------- */
+  function logMatches(e) { const f = FILTERS[$('#log-filter').value]; return !f || f.includes(e.tipo); }
+  function logItem(e) {
+    const t = e.ts;
+    const time = `${pad2(t.getHours())}:${pad2(t.getMinutes())}:${pad2(t.getSeconds())}`;
+    const states = e.de || e.para ? `${e.de || '—'} → ${e.para || '—'}` : '';
+    const meta = [e.sessao, e.origem, e.acao, e.intervalo ? `Δ ${e.intervalo.replace('.', ',')} s` : ''].filter(Boolean).join(' · ');
+    return `<li><div class="log-line"><span class="log-time">${time}</span><span class="log-type t-${esc(e.tipo)}">${esc(e.tipo)}</span>${e.codigo ? `<span class="log-code">${esc(e.codigo)}</span>` : ''}<span class="log-states">${esc(states)}</span></div><span class="log-desc">${esc(e.descricao)}</span><span class="log-meta">${esc(meta)}</span></li>`;
+  }
+  function renderLogs() {
+    const list = Logger.entries.filter(logMatches).slice(-300);
+    $('#log-list').innerHTML = list.length ? list.map(logItem).join('') : '<li class="empty">Nenhum registro para este filtro.</li>';
+    updateLogCount();
+    scrollLogs(true);
+  }
+  function updateLogCount() {
+    const n = Logger.entries.length;
+    $('#log-count').textContent = n;
+    $('#log-summary').textContent = `${n} registro${n === 1 ? '' : 's'} nesta sessão${n > 300 ? ' (exibindo os 300 mais recentes; o CSV inclui todos)' : ''}.`;
+  }
+  function scrollLogs(force) {
+    const panel = $('#panel-logs');
+    if (panel.hidden) return;
+    const near = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 120;
+    if (force || near) panel.scrollTop = panel.scrollHeight;
+  }
+
+  function bind() {
+    renderEventButtons(); renderDemoSteps(); bindSettings(); renderDiag(); renderLogs();
+    gear.addEventListener('click', () => (drawer.hidden ? open() : close()));
+    $('#drawer-close').addEventListener('click', close);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !drawer.hidden && !$('#confirm-dialog').open) { e.preventDefault(); close(); }
+    });
+    $('.tabs', drawer).addEventListener('click', (e) => { const t = e.target.closest('[role="tab"]'); if (t) selectTab(t.id.replace('tab-', '')); });
+    $('.tabs', drawer).addEventListener('keydown', (e) => {
+      const list = tabs();
+      const i = list.indexOf(document.activeElement);
+      if (i < 0) return;
+      let n = null;
+      if (e.key === 'ArrowRight') n = (i + 1) % list.length;
+      if (e.key === 'ArrowLeft') n = (i - 1 + list.length) % list.length;
+      if (e.key === 'Home') n = 0;
+      if (e.key === 'End') n = list.length - 1;
+      if (n !== null) { e.preventDefault(); selectTab(list[n].id.replace('tab-', ''), true); }
+    });
+    // Eventos manuais: usam exatamente RouteSimulator.execute (mesmo caminho da timeline).
+    drawer.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-event]');
+      if (!b) return;
+      AudioEngine.init();
+      b.classList.add('flash'); setTimeout(() => b.classList.remove('flash'), 400);
+      RouteSimulator.execute(b.dataset.event, { origem: 'AVALIADOR' });
+    });
+    $('#run-auto').addEventListener('click', () => RouteSimulator.startAuto());
+    $('#end-nav').addEventListener('click', async () => {
+      const ok = await ConfirmDialog.open({ title: 'Encerrar a navegação?', body: '<p>A timeline, as falas, os sons e as vibrações pendentes serão cancelados.</p>', confirmLabel: 'Encerrar', danger: true });
+      if (ok) RouteSimulator.end('AVALIADOR');
+    });
+    $('#demo-start').addEventListener('click', async () => {
+      AudioEngine.init();
+      if (RouteSimulator.isActive() || RouteSimulator.isRunning()) {
+        const ok = await ConfirmDialog.open({ title: 'Iniciar a demonstração?', body: '<p>Há uma navegação em andamento. Ela será encerrada para iniciar a demonstração rápida.</p>', confirmLabel: 'Encerrar e demonstrar', onConfirmSync: () => AudioEngine.prime() });
+        if (!ok) return;
+      } else {
+        AudioEngine.prime();
+      }
+      RouteSimulator.startDemo();
+    });
+    $('#demo-restart').addEventListener('click', () => { AudioEngine.prime(); RouteSimulator.startDemo(); });
+    $('#demo-end').addEventListener('click', () => RouteSimulator.end('AVALIADOR', { runnerReason: 'encerrada pelo avaliador' }));
+    $('#participant').addEventListener('change', (e) => {
+      Logger.setParticipant(e.target.value.trim());
+      Logger.add({ sessao: RouteSimulator.sessionType(), tipo: 'CONFIGURAÇÃO', codigo: 'participante', origem: 'AVALIADOR', descricao: `Participante identificado: ${e.target.value.trim() || '—'}` });
+    });
+    $('#log-filter').addEventListener('change', renderLogs);
+    $('#export-csv').addEventListener('click', () => {
+      if (!Logger.entries.length) { toast('Ainda não há registros para exportar.', 'warn'); return; }
+      Logger.download();
+      toast(`CSV exportado com ${Logger.entries.length} registros (UTF-8, separador “;”).`, 'ok');
+    });
+    $('#clear-logs').addEventListener('click', async () => {
+      const ok = await ConfirmDialog.open({ title: 'Limpar todos os registros?', body: `<p>${Logger.entries.length} registros serão apagados. Exporte o CSV antes, se precisar deles.</p>`, confirmLabel: 'Limpar registros', danger: true });
+      if (ok) { Logger.clear(); toast('Registros apagados.', 'ok'); }
+    });
+
+    Bus.on('log', (e) => {
+      updateLogCount();
+      if (!logMatches(e)) return;
+      const list = $('#log-list');
+      const empty = list.querySelector('.empty');
+      if (empty) empty.remove();
+      list.insertAdjacentHTML('beforeend', logItem(e));
+      while (list.children.length > 300) list.firstElementChild.remove();
+      scrollLogs(false);
+    });
+    Bus.on('log-cleared', renderLogs);
+    Bus.on('runner', onRunner);
+    Bus.on('state', syncButtons);
+    Bus.on('navigation-start', syncButtons);
+    Bus.on('route-ended', syncButtons);
+    Bus.on('audio-support', renderDiag);
+    syncButtons();
+  }
+  return { bind, open, close };
+})();
+
+/* =====================================================================================
+   12. ENTRADA DO PARTICIPANTE — teclado e teclas de volume
+   Os atalhos só valem durante a navegação e nunca interferem em campos de texto,
+   seletores, abas ou no painel do avaliador.
+   ===================================================================================== */
+function bindKeyboard() {
+  document.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"], [role="tab"], dialog, #drawer')) return;
+    const UP = ['ArrowUp', '+', 'Add', 'AudioVolumeUp', 'VolumeUp'];
+    const DOWN = ['ArrowDown', '-', 'Subtract', 'AudioVolumeDown', 'VolumeDown'];
+    const up = UP.includes(e.key), down = DOWN.includes(e.key);
+    if (!up && !down) return;
+    if (!RouteSimulator.isActive() && UI.current() !== 'pocket') return; // preparação: não interfere
+    e.preventDefault();
+    if (e.repeat) return;
+    const src = e.key.startsWith('Audio') || e.key.startsWith('Volume') ? 'tecla de volume do aparelho' : `teclado (${e.key === 'ArrowUp' ? '↑' : e.key === 'ArrowDown' ? '↓' : e.key})`;
+    if (up) RouteSimulator.volumeUp(src); else RouteSimulator.volumeDown(src);
+  });
+}
+
+/* Registro de TODOS os botões pressionados (fase de captura: antes da ação). */
+function bindButtonLog() {
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const name = (b.getAttribute('aria-label') || b.textContent || '').replace(/\s+/g, ' ').trim();
+    const code = b.dataset.log || b.dataset.event || (b.dataset.vol ? (b.dataset.vol === 'up' ? 'VOL+' : 'VOL−') : '') || b.dataset.train || b.dataset.dir || b.dataset.action || b.id || '';
+    Logger.add({ sessao: RouteSimulator.sessionType(), tipo: 'BOTÃO', codigo: code, de: StateMachine.state, para: StateMachine.state, origem: b.closest('#drawer') ? 'AVALIADOR' : 'INTERFACE', descricao: `Botão pressionado: ${name}` });
+  }, true);
+}
+
+/* =====================================================================================
+   13. INICIALIZAÇÃO
+   ===================================================================================== */
+UI.bind();
+EvaluatorPanel.bind();
+bindKeyboard();
+bindButtonLog();
+RouteSimulator.emitAll();
+AudioEngine.emitSupport();
+Logger.add({ sessao: 'PREPARAÇÃO', tipo: 'SISTEMA', codigo: 'CARREGADO', origem: 'SISTEMA', de: 'PARADO', para: 'PARADO', descricao: `Protótipo carregado · ${navigator.userAgent.includes('Mobile') ? 'dispositivo móvel' : 'desktop'} · Web Audio: ${AudioEngine.support.webAudio ? 'sim' : 'não'} · fala: ${AudioEngine.support.speech ? 'sim' : 'não'} · vibração: ${HapticEngine.supported ? 'sim' : 'não'}` });
+UI.show('welcome', { focus: false });
+})();
+</script>
+</body>
+</html>
