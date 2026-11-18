@@ -108,7 +108,7 @@ Depois é só escanear o QR code com o Expo Go (Android) ou com a câmera (iPhon
 1. Confira se o celular está no **mesmo Wi-Fi** do PC. Dados móveis não funcionam.
 2. Antivírus com firewall próprio (Norton, McAfee, Avast…) bloqueia o celular. Libere o programa **Node.js (`node.exe`)** no controle de programas do firewall. No Norton: *Configurações → Firewall → Controle de programas → node.exe → Permitir*.
 3. Redes de faculdade ou empresa costumam isolar os aparelhos entre si. Nesse caso, use `npm run tunel`.
-4. Se aparecer erro de versão no Expo Go, atualize o app na loja, porque o projeto usa o **Expo SDK 58**.
+4. Se aparecer *"Project is incompatible with this version of Expo Go"*, atualize o Expo Go na loja. O projeto usa o **Expo SDK 57**, que é a versão que o Expo Go das lojas roda.
 5. Para limpar o cache, rode com `-c` no final, por exemplo `npx expo start -c`.
 
 > **iPhone:** no modo silencioso a voz não toca, então tire o celular do silencioso.

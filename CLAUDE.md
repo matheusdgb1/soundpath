@@ -36,7 +36,7 @@ A **Entrega 3** (Definição) manda: personas, jornada, problema e requisitos RF
 
 ## App (`mobile/`)
 
-Expo SDK 58, React Native 0.88, Expo Router (rotas em `src/app/`) e TypeScript estrito. Leia **`mobile/AGENTS.md`**: a API do Expo muda a cada SDK, então consulte a documentação da versão em vez de confiar na memória.
+Expo **SDK 57**, React Native 0.86, Expo Router (rotas em `src/app/`) e TypeScript estrito. Leia **`mobile/AGENTS.md`**: a API do Expo muda a cada SDK, então consulte a documentação da versão em vez de confiar na memória.
 
 ```bash
 cd mobile
@@ -51,6 +51,8 @@ npx expo install <pacote> # SEMPRE use este em vez de npm install <pacote>
 Verificação antes de dizer que está pronto: `npx tsc --noEmit`, `npx expo-doctor` e um bundle com `npx expo export --platform android --platform ios --output-dir <pasta temporária>`.
 
 Só use módulos que existem no **Expo Go**. A equipe testa sem development build.
+
+**Não atualize para o SDK 58** até o Expo Go das lojas suportar essa versão. Em 18/11/2026 o Expo Go da Play Store ainda era SDK 57, e um projeto SDK 58 dava "Project is incompatible with this version of Expo Go".
 
 ### Mapa do código
 
