@@ -92,22 +92,24 @@ O RNF02 limita o app a 4 padrões. Eles se diferenciam pela **quantidade** e pel
 ```bash
 cd mobile
 npm install
-npm run tunel        # recomendado: funciona em qualquer rede
+npx expo login       # só na primeira vez: conta gratuita em expo.dev
+npm run tunel
 ```
 
 Depois é só escanear o QR code com o Expo Go (Android) ou com a câmera (iPhone).
 
 | Comando | Quando usar |
 |---|---|
-| `npm run tunel` | **Padrão.** Passa por um túnel na internet e não depende de estar na mesma rede nem do firewall |
-| `npm start` | Mais rápido, mas o celular e o PC precisam estar no **mesmo Wi-Fi** e o firewall (Windows/Norton) precisa liberar o Node na porta 8081 |
+| `npm run tunel` | **Recomendado.** Usa o túnel da Expo, que funciona em qualquer rede e passa por firewall e antivírus. Precisa estar logado (`npx expo login`) |
+| `npm start` | Sem conta, mas o celular e o PC precisam estar no **mesmo Wi-Fi** e o firewall precisa liberar o Node (veja abaixo) |
 | `npm run web` | Abre no navegador do PC, útil para projetar. Lá não tem vibração e a voz depende do navegador |
 
-**Se o celular não carregar:**
-1. Use `npm run tunel`.
-2. Se o PC tiver o **Hotspot do Windows** ligado, o QR code pode apontar para o endereço errado (`192.168.137.x`). Desligue o hotspot ou use o túnel.
-3. Se aparecer erro de versão no Expo Go, atualize o app na loja, porque o projeto usa o **Expo SDK 58**.
-4. Pare o servidor (Ctrl+C) e rode de novo limpando o cache: `npx expo start -c --tunnel`.
+**Se o celular não carregar com `npm start`:**
+1. Confira se o celular está no **mesmo Wi-Fi** do PC. Dados móveis não funcionam.
+2. Antivírus com firewall próprio (Norton, McAfee, Avast…) bloqueia o celular. Libere o programa **Node.js (`node.exe`)** no controle de programas do firewall. No Norton: *Configurações → Firewall → Controle de programas → node.exe → Permitir*.
+3. Redes de faculdade ou empresa costumam isolar os aparelhos entre si. Nesse caso, use `npm run tunel`.
+4. Se aparecer erro de versão no Expo Go, atualize o app na loja, porque o projeto usa o **Expo SDK 58**.
+5. Para limpar o cache, rode com `-c` no final, por exemplo `npx expo start -c`.
 
 > **iPhone:** no modo silencioso a voz não toca, então tire o celular do silencioso.
 > **Android:** a força da vibração é simulada alongando os toques, porque a API padrão não controla a intensidade.

@@ -41,7 +41,7 @@ Expo SDK 58, React Native 0.88, Expo Router (rotas em `src/app/`) e TypeScript e
 ```bash
 cd mobile
 npm install
-npm run tunel             # roda no celular pelo Expo Go via túnel (padrão da equipe: rede da faculdade/Norton/hotspot atrapalham a LAN)
+npm run tunel             # Expo Go via túnel da Expo (exige `npx expo login`; o ngrok anônimo não funciona mais). Norton bloqueia a LAN no PC do Leonardo
 npm run web               # navegador (precisa de react-native-web, já instalado)
 npx tsc --noEmit          # typecheck
 npx expo-doctor           # versões e configuração
