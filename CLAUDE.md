@@ -41,7 +41,8 @@ Expo SDK 58, React Native 0.88, Expo Router (rotas em `src/app/`) e TypeScript e
 ```bash
 cd mobile
 npm install
-npx expo start            # roda no celular pelo Expo Go
+npm run tunel             # roda no celular pelo Expo Go via túnel (padrão da equipe: rede da faculdade/Norton/hotspot atrapalham a LAN)
+npm run web               # navegador (precisa de react-native-web, já instalado)
 npx tsc --noEmit          # typecheck
 npx expo-doctor           # versões e configuração
 npx expo install <pacote> # SEMPRE use este em vez de npm install <pacote>
