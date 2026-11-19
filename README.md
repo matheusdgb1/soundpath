@@ -25,6 +25,30 @@ A persona principal é a **Lúcia, 67 anos**. Ela usa mapa no celular, mas "tem 
 
 ---
 
+## O que a pesquisa mostrou
+
+O questionário recebeu 23 respostas. Ficaram 21 válidas, e **9 delas são de pessoas com 60 anos ou mais**. A análise completa, só com dados agregados, está em [`pesquisa/analise-questionario.md`](pesquisa/analise-questionario.md).
+
+Entre as 9 pessoas com 60 anos ou mais:
+
+- **9 de 9** já se perderam na rua, e **6 de 9** já deixaram de ir a algum lugar por não saber o caminho.
+- **8 de 9** querem que a voz explique o caminho por **pontos de referência** ("vire depois da farmácia").
+- **6 de 9** têm dificuldade para ouvir o celular na rua, e **5 de 9** não usam fone.
+- O canal preferido é **voz e vibração juntas**. O aviso mais importante é **quando virar**, seguido da **travessia**.
+- Só **3 de 9** disseram que usariam o app com certeza, e 4 responderam "talvez". Confiança é um ponto crítico.
+
+### Mudanças feitas a partir da pesquisa
+
+| Antes | Depois | Por quê |
+|---|---|---|
+| "Vire à direita agora, na Rua Ipê." | "Vire à direita agora, na esquina da padaria. É a Rua Ipê." | 8 de 9 preferem pontos de referência |
+| Voz na velocidade Normal | Voz **Devagar** por padrão, ajustável | 6 de 9 têm dificuldade para ouvir na rua |
+| "Muito bem. Faltam 500 metros." | "Você está no caminho certo. Faltam 500 metros." | "Não confiar nas orientações" foi citado como barreira |
+
+Os lugares citados pela voz (padaria, banco, praça…) são fictícios, como as próprias rotas.
+
+---
+
 ## O protótipo (app)
 
 Fica na pasta [`mobile/`](mobile/). É um app em **Expo (React Native)** que roda no celular de verdade pelo aplicativo **Expo Go**. Voz e vibração são reais; a rota e a localização são simuladas.
@@ -136,6 +160,7 @@ mobile/                 App Expo (protótipo atual)
   src/lib/              Sinais de vibração, voz, estado, simulação da caminhada
   src/data/routes.ts    Rotas fictícias
   scripts/make-icons.py Gera os ícones do app
+pesquisa/               Análise agregada do questionário (sem dados brutos)
 index.html              Protótipo v1 (web), entregue na Entrega 4 e mantido para o "antes x depois"
 ```
 

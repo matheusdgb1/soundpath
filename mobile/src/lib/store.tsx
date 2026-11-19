@@ -40,7 +40,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings>({
     channel: 'ambos',
     volume: 1,
-    speed: 'normal',
+    speed: 'devagar', // pesquisa: 6 de 9 pessoas 60+ têm dificuldade para ouvir o celular na rua
     intensity: 'media',
     pace: 'normal',
   });

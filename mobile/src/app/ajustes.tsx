@@ -19,7 +19,7 @@ export default function Ajustes() {
   const vi = Math.max(0, VOLUMES.indexOf(settings.volume));
 
   const testVoice = (volume = settings.volume, speed = settings.speed) =>
-    say('Daqui a 50 metros, vire à direita.', { volume, speed });
+    say('Daqui a 50 metros, vire à direita na esquina da padaria.', { volume, speed });
 
   return (
     <Screen title="Ajustes" footer={<Button label="Pronto" onPress={() => router.back()} />}>
